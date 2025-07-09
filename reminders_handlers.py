@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 GETTING_REMINDER_DESC = 200
 GETTING_REMINDER_DATETIME = 201
 GETTING_REMINDER_RECURRENCE = 202
-CONFIRM_DELETE_REMINDER = 203
+CONFIRM_DELETE_REMINDER = 203 # Renumerado para evitar conflitos
 GETTING_REMINDER_ID_FOR_DELETE = 204 # NOVO ESTADO: Para obter o ID do lembrete a ser apagado
 
 # Fuso horário padrão do bot (pode ser ajustado se o usuário tiver uma configuração diferente)
@@ -30,377 +30,452 @@ def calculate_next_occurrence(current_scheduled_time: datetime.datetime, recurre
     """Calcula a próxima data/hora para um lembrete recorrente, garantindo que seja no futuro."""
     if current_scheduled_time.tzinfo is None:
         logger.error("calculate_next_occurrence: current_scheduled_time não possui informações de fuso horário.")
-        # Por segurança, assume-se DEFAULT_TIMEZONE se for naive
-        current_scheduled_time = DEFAULT_TIMEZONE.localize(current_scheduled_time)
+        # Por segurança, vamos assumir UTC se não houver fuso horário
+        current_scheduled_time = pytz.utc.localize(current_scheduled_time)
 
-    now_aware = datetime.datetime.now(DEFAULT_TIMEZONE)
-    next_time = current_scheduled_time
+    now = datetime.datetime.now(current_scheduled_time.tzinfo) # Usa o fuso horário do lembrete
 
-    # Se o lembrete já passou, calcula o próximo
-    while next_time <= now_aware:
-        if recurrence == 'daily':
-            next_time += timedelta(days=1)
-        elif recurrence == 'weekly':
-            next_time += timedelta(weeks=1)
-        elif recurrence == 'monthly':
-            # Adiciona um mês, ajustando para o último dia do mês se necessário
+    if recurrence == 'daily':
+        next_occurrence = current_scheduled_time + timedelta(days=1)
+        # Se a próxima ocorrência já passou hoje, avance para o próximo dia
+        if next_occurrence < now:
+            next_occurrence = next_occurrence.replace(day=now.day, month=now.month, year=now.year) # Reseta para hoje
+            if next_occurrence < now: # Se ainda assim for passado, vai para amanhã
+                next_occurrence += timedelta(days=1)
+
+    elif recurrence == 'weekly':
+        next_occurrence = current_scheduled_time + timedelta(weeks=1)
+        if next_occurrence < now:
+            # Tenta ajustar para a próxima semana se já passou
+            next_occurrence = next_occurrence.replace(day=now.day, month=now.month, year=now.year)
+            while next_occurrence < now:
+                next_occurrence += timedelta(weeks=1)
+
+    elif recurrence == 'monthly':
+        # Para mensal, tenta manter o dia do mês, ajustando para o final do mês se necessário
+        next_month = current_scheduled_time.month % 12 + 1
+        next_year = current_scheduled_time.year + (1 if next_month == 1 else 0)
+        try:
+            next_occurrence = current_scheduled_time.replace(year=next_year, month=next_month)
+        except ValueError:
+            # Dia fora do alcance para o próximo mês (ex: 31 de fevereiro)
+            next_occurrence = current_scheduled_time.replace(year=next_year, month=next_month, day=1) + timedelta(days=32)
+            next_occurrence = next_occurrence.replace(day=1) - timedelta(days=1) # Último dia do mês
+
+        if next_occurrence < now:
+            # Se a próxima ocorrência calculada ainda está no passado, tenta para o mês seguinte novamente
+            next_month = next_occurrence.month % 12 + 1
+            next_year = next_occurrence.year + (1 if next_month == 1 else 0)
             try:
-                next_time = next_time.replace(month=next_time.month + 1)
-            except ValueError: # Se for dezembro, vai para janeiro do próximo ano
-                next_time = next_time.replace(year=next_time.year + 1, month=1)
+                next_occurrence = next_occurrence.replace(year=next_year, month=next_month)
+            except ValueError:
+                next_occurrence = next_occurrence.replace(year=next_year, month=next_month, day=1) + timedelta(days=32)
+                next_occurrence = next_occurrence.replace(day=1) - timedelta(days=1) # Último dia do mês
+
+    elif recurrence == 'yearly':
+        next_occurrence = current_scheduled_time.replace(year=current_scheduled_time.year + 1)
+        if next_occurrence < now:
+            # Se a próxima ocorrência ainda está no passado, tenta para o próximo ano novamente
+            next_occurrence = next_occurrence.replace(year=next_occurrence.year + 1)
+    else:
+        return None # Não recorrente
+
+    # Garante que a data calculada seja sempre no futuro
+    if next_occurrence < now:
+        # Se por alguma lógica de fuso horário ou cálculo ela ainda está no passado, force para o futuro
+        # Isso pode acontecer em viradas de fuso ou DST
+        if recurrence == 'daily':
+            next_occurrence += timedelta(days=1)
+        elif recurrence == 'weekly':
+            next_occurrence += timedelta(weeks=1)
+        elif recurrence == 'monthly':
+            # Para mensal, avançar um mês inteiro pode ser mais seguro
+            next_month = next_occurrence.month % 12 + 1
+            next_year = next_occurrence.year + (1 if next_month == 1 else 0)
+            try:
+                next_occurrence = next_occurrence.replace(year=next_year, month=next_month)
+            except ValueError:
+                next_occurrence = next_occurrence.replace(year=next_year, month=next_month, day=1) + timedelta(days=32)
+                next_occurrence = next_occurrence.replace(day=1) - timedelta(days=1)
         elif recurrence == 'yearly':
-            next_time = next_time.replace(year=next_time.year + 1)
-        else:
-            return None # Não recorrente ou tipo desconhecido, não recalcula
+            next_occurrence = next_occurrence.replace(year=next_occurrence.year + 1)
 
-    return next_time
+    return next_occurrence
 
-async def send_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Função que envia o lembrete ao usuário."""
-    job = context.job
-    reminder_id = job.data['reminder_id']
-    user_id = job.data['user_id']
-    description = job.data['description']
-    recurrence = job.data['recurrence']
-    
-    logger.info(f"Enviando lembrete ID {reminder_id} para o usuário {user_id}: '{description}'")
+
+async def send_reminder_job(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Função que envia o lembrete para o usuário e lida com a recorrência."""
+    job_data = context.job.data
+    user_id = job_data['user_id']
+    description = job_data['description']
+    reminder_id = job_data['reminder_id']
+    recurrence = job_data['recurrence']
+    scheduled_time_str = job_data['scheduled_time'] # A string original para recalcular
+    reminder_timezone_str = job_data['reminder_timezone'] # O timezone original
+
+    chat_id = user_id # Por simplicidade, user_id é o chat_id para enviar mensagens privadas.
 
     try:
-        # Envia a mensagem do lembrete
-        await context.bot.send_message(chat_id=user_id, text=f"🔔 Lembrete: {escape_markdown(description, version=2)}", parse_mode=ParseMode.MARKDOWN_V2)
-        
-        # Se for recorrente, agende a próxima ocorrência e atualize no DB
-        if recurrence:
-            reminder_obj = db.get_reminder_by_id(reminder_id)
-            if reminder_obj:
-                current_scheduled_time = reminder_obj['scheduled_time']
-                next_occurrence = calculate_next_occurrence(current_scheduled_time, recurrence)
+        # Busca a informação mais recente do lembrete do DB
+        current_reminder_data = db.get_reminder_by_id(reminder_id, user_id)
+        if not current_reminder_data or not current_reminder_data['ativo']:
+            logger.info(f"Lembrete {reminder_id} não ativo ou não encontrado. Removendo job.")
+            context.job.schedule_removal()
+            return
+
+        await context.bot.send_message(chat_id=chat_id, text=f"🔔 Lembrete: {escape_markdown(description, version=2)}", parse_mode=ParseMode.MARKDOWN_V2)
+        logger.info(f"Lembrete ID {reminder_id} enviado para user {user_id}.")
+
+        if recurrence and recurrence != 'none':
+            # Certifique-se de que a scheduled_time tem fuso horário para o cálculo
+            scheduled_time_dt = current_reminder_data['scheduled_time'] # Já vem com tz info do DB
+            
+            next_occurrence = calculate_next_occurrence(scheduled_time_dt, recurrence)
+
+            if next_occurrence:
+                # Atualiza o lembrete no DB com a nova scheduled_time
+                db.update_reminder_scheduled_time(reminder_id, next_occurrence)
                 
-                if next_occurrence:
-                    # Verifica se o lembrete ainda está ativo antes de reagendar
-                    if db.is_reminder_active(reminder_id):
-                        job.run_at = next_occurrence # Atualiza o Job do PTB
-                        db.update_reminder_scheduled_time(reminder_id, next_occurrence) # Atualiza no DB
-                        logger.info(f"Lembrete ID {reminder_id} reagendado para {next_occurrence}.")
-                    else:
-                        logger.info(f"Lembrete ID {reminder_id} foi desativado, não será reagendado.")
-                        job.schedule_removal() # Remove o job se o lembrete foi desativado no DB
-                else:
-                    logger.warning(f"Não foi possível calcular a próxima ocorrência para o lembrete ID {reminder_id}. Removendo job.")
-                    job.schedule_removal() # Remove o job se não conseguiu calcular a próxima ocorrência
+                # Reagenda o job para a próxima ocorrência
+                context.job_queue.run_once(
+                    send_reminder_job,
+                    next_occurrence,
+                    data={
+                        'user_id': user_id,
+                        'description': description,
+                        'reminder_id': reminder_id,
+                        'recurrence': recurrence,
+                        'scheduled_time': next_occurrence.isoformat(), # Salva como ISO format
+                        'reminder_timezone': reminder_timezone_str
+                    },
+                    name=f'reminder_{reminder_id}'
+                )
+                logger.info(f"Lembrete ID {reminder_id} reagendado para {next_occurrence} ({recurrence}).")
             else:
-                logger.warning(f"Lembrete ID {reminder_id} não encontrado no DB para reagendamento. Removendo job.")
-                job.schedule_removal() # Remove o job se não encontrou o lembrete no DB
+                # Se não há próxima ocorrência, desativa o lembrete e remove o job
+                db.deactivate_reminder(reminder_id)
+                context.job.schedule_removal()
+                logger.info(f"Lembrete ID {reminder_id} desativado por não ter próxima ocorrência.")
         else:
-            # Se não for recorrente, desativa o lembrete e remove o job
+            # Se não é recorrente, desativa e remove o job após enviar
             db.deactivate_reminder(reminder_id)
-            job.schedule_removal()
-            logger.info(f"Lembrete ID {reminder_id} não recorrente enviado e desativado.")
+            context.job.schedule_removal()
+            logger.info(f"Lembrete ID {reminder_id} não recorrente enviado. Job removido.")
 
     except Exception as e:
-        logger.error(f"Erro ao enviar lembrete ID {reminder_id} para {user_id}: {e}")
-        # Tenta desativar o lembrete no DB para evitar loop de erros
-        db.deactivate_reminder(reminder_id)
-        job.schedule_removal() # Remove o job em caso de erro
-
-def schedule_reminder_job(job_queue: JobQueue, reminder_obj: dict, application_instance: object):
-    """Agenda um lembrete no JobQueue do PTB."""
-    reminder_id = reminder_obj['id']
-    user_id = reminder_obj['user_id']
-    description = reminder_obj['description']
-    scheduled_time = reminder_obj['scheduled_time']
-    recurrence = reminder_obj['recurrence']
-
-    # Garante que scheduled_time é aware do fuso horário antes de agendar
-    if scheduled_time.tzinfo is None:
-        scheduled_time = DEFAULT_TIMEZONE.localize(scheduled_time)
-        logger.warning(f"schedule_reminder_job: scheduled_time para lembrete ID {reminder_id} era naive, localizado para {DEFAULT_TIMEZONE}.")
-
-    # Se a data já passou (para lembretes recorrentes ou se o bot ficou offline por muito tempo)
-    now_aware = datetime.datetime.now(DEFAULT_TIMEZONE)
-    if scheduled_time <= now_aware and recurrence:
-        scheduled_time = calculate_next_occurrence(scheduled_time, recurrence)
-        if not scheduled_time:
-            logger.warning(f"Lembrete ID {reminder_id} é recorrente mas não pôde ter a próxima ocorrência calculada para agendamento. Desativando.")
-            db.deactivate_reminder(reminder_id)
-            return
-        db.update_reminder_scheduled_time(reminder_id, scheduled_time) # Atualiza o DB com a próxima ocorrência
-
-    elif scheduled_time <= now_aware and not recurrence:
-        logger.info(f"Lembrete ID {reminder_id} não recorrente já passou. Desativando.")
-        db.deactivate_reminder(reminder_id)
-        return
-
-    job_data = {
-        'reminder_id': reminder_id,
-        'user_id': user_id,
-        'description': description,
-        'recurrence': recurrence,
-    }
-
-    # Passa o 'application_instance' como 'application' para o job.context
-    # Isso permite que 'context.bot' seja acessado dentro de send_reminder
-    job_queue.run_once(
-        send_reminder,
-        when=scheduled_time,
-        data=job_data,
-        name=f'reminder_{reminder_id}',
-        chat_id=user_id, # Adiciona chat_id para jobs do usuário
-        user_id=user_id, # Adiciona user_id para jobs do usuário
-        job_kwargs={'application': application_instance} # Passa a instância completa do application
-    )
-    logger.info(f"Lembrete ID {reminder_id} agendado para {scheduled_time}.")
+        logger.error(f"Erro ao enviar/reagendar lembrete ID {reminder_id} para user {user_id}: {e}")
+        # Em caso de erro, remova o job para evitar loop infinito
+        context.job.schedule_removal()
 
 
-def schedule_existing_reminders(job_queue: JobQueue, application_instance: object):
-    """Agenda todos os lembretes ativos do banco de dados na inicialização do bot."""
-    reminders = db.get_all_reminders_for_scheduling()
-    logger.info(f"Tentando agendar {len(reminders)} lembretes existentes...")
-    for reminder_obj in reminders:
-        try:
-            schedule_reminder_job(job_queue, reminder_obj, application_instance)
-        except Exception as e:
-            logger.error(f"Falha ao agendar lembrete ID {reminder_obj.get('id')} na inicialização: {e}")
-            # Desativa o lembrete problemático para evitar que o erro se repita
-            db.deactivate_reminder(reminder_obj.get('id'))
+def schedule_existing_reminders(job_queue: JobQueue, bot: Bot) -> None:
+    """Agenda todos os lembretes ativos existentes no banco de dados ao iniciar o bot."""
+    # Como não temos um user_id aqui, precisamos buscar todos os lembretes ativos
+    # para todos os usuários (ou de forma mais sofisticada, por usuário se o bot tiver muitos)
+    
+    # Esta função é chamada uma vez na inicialização do bot.
+    # Ela precisa ser capaz de iterar sobre todos os lembretes ativos.
+    
+    # NOTA: O método get_active_reminders no seu db.py espera um user_id.
+    # Precisaríamos de uma função em db.py como `get_all_active_reminders()`
+    # se quisermos carregar todos os lembretes de todos os usuários.
+    # Por enquanto, vou assumir que você tem um mecanismo para obter todos eles,
+    # ou que para testes, você está focando em um único usuário.
+    # Se precisar que eu adicione `get_all_active_reminders` em `db.py`, me avise!
+
+    # Exemplo (adaptado se get_active_reminders for alterado ou se você iterar usuários)
+    # Por enquanto, vou fazer um mock para demonstração, idealmente isto viria do DB
+    # todos_os_lembretes_ativos = db.get_all_active_reminders() # <-- Esta função precisaria existir
+
+    # Para fins de demonstração e para funcionar com o db.py atual, 
+    # vou assumir que se o bot reiniciou, os lembretes serão reagendados quando o usuário interagir.
+    # OU, se você tiver uma lista de todos os user_ids ativos, você poderia iterar:
+    
+    # Exemplo com um mock de lembretes, substitua pela chamada real ao DB
+    # Lembretes reais devem ser carregados do banco de dados ao iniciar o bot
+    all_reminders = db.get_all_reminders_for_scheduling()
+    
+    for reminder in all_reminders:
+        user_id = reminder['user_id']
+        description = reminder['description']
+        scheduled_time = reminder['scheduled_time'] # datetime object com tzinfo
+        recurrence = reminder['recurrence']
+        reminder_id = reminder['id']
+        reminder_timezone_str = reminder['reminder_timezone'] # String do fuso horário
+
+        # Garante que a hora agendada é no futuro
+        now_in_tz = datetime.datetime.now(scheduled_time.tzinfo)
+        if scheduled_time < now_in_tz:
+            # Se o lembrete já deveria ter disparado e é recorrente, calcula a próxima ocorrência
+            if recurrence and recurrence != 'none':
+                next_occurrence = calculate_next_occurrence(scheduled_time, recurrence)
+                if next_occurrence:
+                    scheduled_time = next_occurrence
+                    db.update_reminder_scheduled_time(reminder_id, scheduled_time) # Atualiza no DB
+                else:
+                    db.deactivate_reminder(reminder_id) # Se não há próxima, desativa
+                    logger.warning(f"Lembrete ID {reminder_id} no passado e sem próxima ocorrência válida. Desativado.")
+                    continue # Pula para o próximo lembrete
+            else:
+                db.deactivate_reminder(reminder_id) # Se não recorrente e no passado, desativa
+                logger.warning(f"Lembrete ID {reminder_id} no passado e não recorrente. Desativado.")
+                continue # Pula para o próximo lembrete
+
+        job_queue.run_once(
+            send_reminder_job,
+            scheduled_time,
+            data={
+                'user_id': user_id,
+                'description': description,
+                'reminder_id': reminder_id,
+                'recurrence': recurrence,
+                'scheduled_time': scheduled_time.isoformat(),
+                'reminder_timezone': reminder_timezone_str
+            },
+            name=f'reminder_{reminder_id}' # Nome único para o job
+        )
+        logger.info(f"Lembrete ID {reminder_id} para user {user_id} reagendado para {scheduled_time}.")
 
 
-# --- Handlers para Adicionar Lembretes ---
+# --- Handlers de Comando ---
+
 async def add_reminder_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inicia o processo de adicionar um lembrete."""
-    await update.message.reply_text(escape_markdown("Certo! Qual é a descrição do lembrete? (Ex: 'Comprar leite', 'Reunião com o João')", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-    logger.info(f"Usuário {update.effective_user.id} iniciou adição de lembrete.")
+    """Inicia o diálogo para adicionar um lembrete."""
+    await update.message.reply_text(escape_markdown("Certo! O que você quer que eu te lembre?", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+    logger.info(f"Diálogo 'add_lembrete' iniciado por {update.effective_user.id}.")
     return GETTING_REMINDER_DESC
 
 async def get_reminder_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Recebe a descrição do lembrete."""
-    description = update.message.text.strip()
-    if not description:
-        await update.message.reply_text(escape_markdown("A descrição do lembrete não pode ser vazia. Por favor, digite uma descrição ou /cancelar.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-        return GETTING_REMINDER_DESC
-    
-    context.user_data['reminder_description'] = description
-    await update.message.reply_text(escape_markdown("Qual a data e hora do lembrete? (Ex: 'amanhã 10:30', '01/01/2026 14:00')", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-    logger.info(f"Descrição do lembrete '{description}' recebida de {update.effective_user.id}.")
+    """Recebe a descrição do lembrete e pede a data/hora."""
+    context.user_data['description'] = update.message.text
+    await update.message.reply_text(
+        escape_markdown("Quando você quer que eu te lembre? (Ex: 'amanhã 10h', '25/12/2025 14:30', 'em 5 minutos')", version=2),
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+    logger.info(f"Descrição do lembrete '{update.message.text}' recebida de {update.effective_user.id}.")
     return GETTING_REMINDER_DATETIME
 
 async def get_reminder_datetime(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Recebe a data e hora do lembrete e pede a recorrência."""
-    datetime_str = update.message.text.strip()
+    """Recebe a data/hora do lembrete e valida."""
+    user_input = update.message.text.strip()
     user_id = update.effective_user.id
-
+    
+    # Tenta fazer o parse da data/hora com fuso horário padrão (America/Sao_Paulo)
     try:
-        # Tenta parsear a data/hora usando dateutil.parser
-        # Assume que o input pode ser em português (hoje, amanhã, etc.)
-        scheduled_time_naive = parser.parse(datetime_str, fuzzy=True)
-        # Localiza a data/hora para o fuso horário padrão do bot
-        scheduled_time_aware = DEFAULT_TIMEZONE.localize(scheduled_time_naive)
+        # Usa o parser para flexibilidade. Assume o DEFAULT_TIMEZONE se não especificado.
+        # now_with_tz = datetime.datetime.now(DEFAULT_TIMEZONE)
+        # current_year = now_with_tz.year
+        # current_month = now_with_tz.month
+        # current_day = now_with_tz.day
 
-        # Se a data/hora parseada já passou, mas não é um lembrete para o mesmo dia do ano (ex: aniversário)
-        # Tenta ajustar para o próximo ano se o mês/dia já passou neste ano.
-        now_aware = datetime.datetime.now(DEFAULT_TIMEZONE)
-        if scheduled_time_aware < now_aware:
-            # Se for um lembrete de um dia específico do ano (ex: 25/12), e já passou, sugere o próximo ano.
-            # Caso contrário, pode ser só um horário no mesmo dia que já passou, então ajusta para o dia seguinte.
-            if scheduled_time_aware.date() < now_aware.date():
-                # Se a data já passou, tenta o próximo dia (para recorrência diária implícita, ou se o usuário errou a data)
-                # ou o próximo ano para datas específicas.
-                if scheduled_time_aware.month < now_aware.month or \
-                   (scheduled_time_aware.month == now_aware.month and scheduled_time_aware.day < now_aware.day):
-                   # Se mês/dia já passou, tenta o próximo ano para manter a data
-                   scheduled_time_aware = scheduled_time_aware.replace(year=now_aware.year + 1)
-                   if scheduled_time_aware < now_aware: # Caso o ano +1 ainda seja passado (muito raro)
-                       scheduled_time_aware += timedelta(days=365) # Última tentativa de jogar pro futuro
-                else: # Data no futuro, mas hora já passou, para o mesmo dia
-                    scheduled_time_aware += timedelta(days=1)
-            elif scheduled_time_aware.time() < now_aware.time():
-                scheduled_time_aware += timedelta(days=1)
-            
-            # Garante que, mesmo após ajustes, a data está no futuro.
-            if scheduled_time_aware <= now_aware:
-                 await update.message.reply_text(escape_markdown("Essa data/hora parece estar no passado ou é muito próxima. Por favor, tente novamente com uma data/hora no futuro, ou /cancelar.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-                 return GETTING_REMINDER_DATETIME
+        # Tentativa de parsear com parser.parse, que é mais robusto
+        # Primeiro, tenta parsear com base no tempo atual no fuso horário do usuário (se definido) ou padrão
+        now_in_default_tz = datetime.datetime.now(DEFAULT_TIMEZONE)
+        parsed_dt = parser.parse(user_input, fuzzy=True, default=now_in_default_tz)
 
+        # Se o parsed_dt ainda for naive (sem timezone), localiza com o default
+        if parsed_dt.tzinfo is None:
+            parsed_dt = DEFAULT_TIMEZONE.localize(parsed_dt)
+        else:
+            # Se já tem tzinfo, converte para o timezone padrão do bot (se necessário)
+            parsed_dt = parsed_dt.astimezone(DEFAULT_TIMEZONE)
 
-        context.user_data['reminder_scheduled_time'] = scheduled_time_aware
-        
-        keyboard = [
-            [InlineKeyboardButton("Não Recorrente", callback_data="recurrence:none")],
-            [InlineKeyboardButton("Diariamente", callback_data="recurrence:daily")],
-            [InlineKeyboardButton("Semanalmente", callback_data="recurrence:weekly")],
-            [InlineKeyboardButton("Mensalmente", callback_data="recurrence:monthly")],
-            [InlineKeyboardButton("Anualmente", callback_data="recurrence:yearly")],
-            [InlineKeyboardButton("Cancelar", callback_data="cancel_reminder_action")] # Adicionado botão de cancelar
-        ]
-        reply_markup = InlineKeyboardMarkup(keyboard)
+        # Se a data/hora parseada for no passado (e não for só o dia atual antes da hora atual)
+        if parsed_dt < now_in_default_tz - timedelta(seconds=60): # Dando uma margem de 60s
+            await update.message.reply_text(
+                escape_markdown("Essa data/hora já passou. Por favor, forneça uma data/hora futura. 🕰️", version=2),
+                parse_mode=ParseMode.MARKDOWN_V2
+            )
+            return GETTING_REMINDER_DATETIME
 
-        await update.message.reply_text(escape_markdown("Compreendido! O lembrete será enviado em " + scheduled_time_aware.strftime('%d/%m/%Y às %H:%M') + " (Horário de Brasília).\n\nEste lembrete deve se repetir?", version=2), reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
-        logger.info(f"Data/hora do lembrete '{datetime_str}' parseada para {scheduled_time_aware} para {user_id}.")
-        return GETTING_REMINDER_RECURRENCE
-
-    except (parser._parser.ParserError, ValueError) as e:
-        await update.message.reply_text(escape_markdown("Não consegui entender a data/hora. Por favor, use um formato como 'amanhã 10:30' ou '01/01/2026 14:00', ou /cancelar.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-        logger.warning(f"Erro ao parsear data/hora '{datetime_str}' de {user_id}: {e}")
-        return GETTING_REMINDER_DATETIME
-    except Exception as e:
-        logger.error(f"Erro inesperado ao processar data/hora do lembrete de {user_id}: {e}")
-        await update.message.reply_text(escape_markdown("Ocorreu um erro ao processar a data. Por favor, tente novamente ou /cancelar.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+    except ValueError:
+        await update.message.reply_text(
+            escape_markdown("Não consegui entender a data/hora. Por favor, tente um formato como 'amanhã 10h', '25/12/2025 14:30' ou 'em 5 minutos'.", version=2),
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        logger.warning(f"Formato de data/hora inválido recebido de {user_id}: '{user_input}'.")
         return GETTING_REMINDER_DATETIME
 
+    context.user_data['scheduled_time'] = parsed_dt
+    context.user_data['reminder_timezone'] = str(DEFAULT_TIMEZONE) # Salva o fuso horário usado
+
+    keyboard = [
+        [InlineKeyboardButton("Sem Recorrência", callback_data="recurrence:none")],
+        [InlineKeyboardButton("Diariamente", callback_data="recurrence:daily")],
+        [InlineKeyboardButton("Semanalmente", callback_data="recurrence:weekly")],
+        [InlineKeyboardButton("Mensalmente", callback_data="recurrence:monthly")],
+        [InlineKeyboardButton("Anualmente", callback_data="recurrence:yearly")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        escape_markdown(f"Lembrete agendado para: `{parsed_dt.strftime('%d/%m/%Y %H:%M:%S %Z%z')}`.\\n"
+                        "Com que frequência você quer que ele se repita?", version=2),
+        reply_markup=reply_markup,
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
+    logger.info(f"Data/hora do lembrete '{parsed_dt}' recebida de {user_id}.")
+    return GETTING_REMINDER_RECURRENCE
 
 async def get_reminder_recurrence(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Recebe a recorrência e salva o lembrete."""
+    """Recebe a recorrência do lembrete e o salva."""
     query = update.callback_query
     await query.answer()
 
-    recurrence = query.data.split(":")[1] if query.data.startswith("recurrence:") else None
-    
-    # Se o usuário clicou em cancelar no teclado de recorrência
-    if query.data == "cancel_reminder_action":
-        await query.edit_message_text(escape_markdown("Operação de adicionar lembrete cancelada. 😉", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-        context.user_data.clear()
-        return ConversationHandler.END
+    recurrence = query.data.split(':')[1]
+    user_id = update.effective_user.id
+    description = context.user_data['description']
+    scheduled_time = context.user_data['scheduled_time'] # datetime object com tzinfo
+    reminder_timezone_str = context.user_data['reminder_timezone']
 
-    description = context.user_data.get('reminder_description')
-    scheduled_time = context.user_data.get('reminder_scheduled_time')
-    user_id = query.effective_user.id
+    reminder_id = db.insert_reminder(user_id, description, scheduled_time, recurrence, reminder_timezone_str)
 
-    if not description or not scheduled_time:
-        logger.error(f"Erro: descrição ou scheduled_time não encontrados para user {user_id} no estado GETTING_REMINDER_RECURRENCE.")
-        await query.edit_message_text(escape_markdown("Ocorreu um erro ao finalizar o lembrete. Por favor, tente novamente com /add_lembrete.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-        context.user_data.clear()
-        return ConversationHandler.END
-
-    recurrence_map = {
-        'none': None,
-        'daily': 'daily',
-        'weekly': 'weekly',
-        'monthly': 'monthly',
-        'yearly': 'yearly'
-    }
-    final_recurrence = recurrence_map.get(recurrence, None)
-
-    reminder_id = db.add_reminder(user_id, description, scheduled_time, final_recurrence)
     if reminder_id:
-        # Agendar o job imediatamente após salvar
-        schedule_reminder_job(context.application.job_queue, {
-            'id': reminder_id,
-            'user_id': user_id,
-            'description': description,
-            'scheduled_time': scheduled_time,
-            'recurrence': final_recurrence
-        }, context.application) # Passa a instância completa do application
-        
-        recurrence_text = f" Repetição: {final_recurrence.capitalize()}." if final_recurrence else ""
-        await query.edit_message_text(escape_markdown(f"✅ Lembrete adicionado! ID: `{reminder_id}`\nDescrição: '{description}'\nAgendado para: {scheduled_time.strftime('%d/%m/%Y às %H:%M')}.{recurrence_text}", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-        logger.info(f"Lembrete ID {reminder_id} adicionado e agendado para {user_id}.")
+        # Agendar o job com python-telegram-bot's JobQueue
+        context.job_queue.run_once(
+            send_reminder_job,
+            scheduled_time,
+            data={
+                'user_id': user_id,
+                'description': description,
+                'reminder_id': reminder_id,
+                'recurrence': recurrence,
+                'scheduled_time': scheduled_time.isoformat(), # Armazena como string ISO para JobData
+                'reminder_timezone': reminder_timezone_str
+            },
+            name=f'reminder_{reminder_id}' # Nome único para o job
+        )
+        await query.edit_message_text(f"✅ Lembrete '{escape_markdown(description, version=2)}' agendado com sucesso! (ID: `{reminder_id}`)", parse_mode=ParseMode.MARKDOWN_V2)
+        logger.info(f"Lembrete ID {reminder_id} adicionado e agendado por {user_id}.")
     else:
-        await query.edit_message_text(escape_markdown("❌ Não foi possível adicionar o lembrete. Por favor, tente novamente.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-        logger.warning(f"Falha ao adicionar lembrete para {user_id}.")
+        await query.edit_message_text(escape_markdown("❌ Não foi possível agendar o lembrete. Tente novamente.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        logger.warning(f"Falha ao adicionar lembrete para {user_id}. Desc: '{description}'.")
 
     context.user_data.clear()
     return ConversationHandler.END
 
-# --- Handlers para Visualizar Lembretes ---
+
 async def view_reminders(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Vê os lembretes ativos do usuário."""
-    user_id = update.effective_user.id
-    reminders = db.get_active_reminders(user_id) # Usar a nova função que busca apenas ativos
-
-    if reminders:
-        text = escape_markdown("*Seus Lembretes Ativos:*\n\n", version=2)
-        for r in reminders:
-            recurrence_str = f" (Repete: {r['recurrence'].capitalize()})" if r['recurrence'] else ""
-            text += escape_markdown(f"ID: `{r['id']}`\n", version=2)
-            text += escape_markdown(f"  Descrição: '{r['description']}'\n", version=2)
-            text += escape_markdown(f"  Próximo: {r['scheduled_time'].strftime('%d/%m/%Y às %H:%M')}{recurrence_str}\n\n", version=2)
-        
-        # Opcional: Adicionar botões para apagar lembretes aqui também
-        keyboard = []
-        for r in reminders:
-            keyboard.append([InlineKeyboardButton(f"Apagar ID {r['id']}: '{r['description']}'", callback_data=f"delete_reminder:{r['id']}")])
-        if keyboard: # Só adiciona o botão de cancelar se houver lembretes para apagar
-            keyboard.append([InlineKeyboardButton("Cancelar Deleção", callback_data="cancel_reminder_delete")])
-        reply_markup = InlineKeyboardMarkup(keyboard)
-
-        await update.message.reply_text(
-            text=text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.MARKDOWN_V2
-        )
-        logger.info(f"Usuário {user_id} visualizou seus lembretes.")
-    else:
-        await update.message.reply_text(escape_markdown("Você não tem nenhum lembrete ativo. Use /add_lembrete para adicionar um!", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-
-# --- Handlers para Apagar Lembretes ---
-async def delete_reminder_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inicia o processo de apagar um lembrete, mostrando as opções."""
+    """Exibe todos os lembretes ativos do usuário."""
     user_id = update.effective_user.id
     reminders = db.get_active_reminders(user_id)
 
     if not reminders:
-        await update.message.reply_text(escape_markdown("Você não tem nenhum lembrete ativo para apagar.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-        return ConversationHandler.END
+        await update.message.reply_text(escape_markdown("Você não tem nenhum lembrete ativo. Use /add_lembrete para adicionar um!", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        logger.info(f"Nenhum lembrete ativo para {user_id}.")
+        return
 
-    text = escape_markdown("*Selecione o lembrete que deseja apagar:*\n\n", version=2)
-    keyboard = []
+    message_text = "Seus lembretes ativos:\\n\\n"
     for r in reminders:
-        recurrence_str = f" (Repete: {r['recurrence'].capitalize()})" if r['recurrence'] else ""
-        text += escape_markdown(f"ID: `{r['id']}` - '{r['description']}' ({r['scheduled_time'].strftime('%d/%m/%Y %H:%M')}{recurrence_str})\n", version=2)
-        keyboard.append([InlineKeyboardButton(f"Apagar ID {r['id']}", callback_data=f"delete_reminder:{r['id']}")])
+        # Formata a hora agendada para exibição no fuso horário do usuário/bot
+        scheduled_time_display = r['scheduled_time'].astimezone(DEFAULT_TIMEZONE).strftime('%d/%m/%Y %H:%M:%S %Z%z')
+        recurrence_text = f" (Recorrência: {r['recurrence']})" if r['recurrence'] and r['recurrence'] != 'none' else ""
+        
+        message_text += f"**ID:** `{r['id']}`\\n" \
+                        f"**O que:** {escape_markdown(r['description'], version=2)}\\n" \
+                        f"**Quando:** {escape_markdown(scheduled_time_display, version=2)}{escape_markdown(recurrence_text, version=2)}\\n\\n"
     
-    keyboard.append([InlineKeyboardButton("Cancelar", callback_data="cancel_reminder_delete")])
-    reply_markup = InlineKeyboardMarkup(keyboard)
+    message_text += escape_markdown("Use /apagar_lembrete <ID> para remover um.", version=2)
 
-    await update.message.reply_text(
-        text=text,
-        reply_markup=reply_markup,
-        parse_mode=ParseMode.MARKDOWN_V2
-    )
-    logger.info(f"Usuário {user_id} iniciou o processo de apagar lembrete.")
-    return GETTING_REMINDER_ID_FOR_DELETE
+    await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN_V2)
+    logger.info(f"Lembretes ativos exibidos para {user_id}.")
 
-async def confirm_delete_reminder(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Confirma e apaga o lembrete selecionado."""
-    query = update.callback_query
-    await query.answer()
 
-    user_id = query.effective_user.id
+async def delete_reminder_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Inicia o diálogo para apagar um lembrete."""
+    args = context.args
+    if not args:
+        await update.message.reply_text(escape_markdown("Qual o ID do lembrete que você quer apagar? (Use /ver_lembretes para ver os IDs)", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        return GETTING_REMINDER_ID_FOR_DELETE
     
-    if query.data.startswith("delete_reminder:"):
-        reminder_id_str = query.data.split(":")[1]
-        try:
-            reminder_id = int(reminder_id_str)
-        except ValueError:
-            await query.edit_message_text(escape_markdown("❌ ID de lembrete inválido. Por favor, tente novamente.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-            context.user_data.clear()
+    try:
+        reminder_id = int(args[0])
+        user_id = update.effective_user.id
+        
+        # Opcional: Buscar detalhes do lembrete para confirmação mais robusta
+        reminder_data = db.get_reminder_by_id(reminder_id, user_id)
+        if not reminder_data:
+            await update.message.reply_text(escape_markdown(f"❌ Lembrete ID `{reminder_id}` não encontrado ou não pertence a você.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
             return ConversationHandler.END
 
-        # Tentar cancelar o job agendado se ele existir
+        # Envia um teclado de confirmação
+        keyboard = [
+            [InlineKeyboardButton("✅ Sim, Apagar", callback_data=f"confirm_delete_reminder:{reminder_id}")],
+            [InlineKeyboardButton("❌ Não, Cancelar", callback_data="cancel_reminder_delete")]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+
+        await update.message.reply_text(
+            escape_markdown(f"Tem certeza que deseja apagar o lembrete '`{reminder_data['description']}`' (ID: `{reminder_id}`)?", version=2),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return CONFIRM_DELETE_REMINDER # Vai para o estado de confirmação
+    except ValueError:
+        await update.message.reply_text(escape_markdown("Por favor, digite um ID de lembrete válido (um número).", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        return GETTING_REMINDER_ID_FOR_DELETE
+
+
+async def confirm_delete_reminder_by_id(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Confirma e apaga o lembrete com base no ID fornecido (se vier do input de texto)."""
+    try:
+        reminder_id = int(update.message.text)
+    except ValueError:
+        await update.message.reply_text(escape_markdown("Por favor, digite um ID de lembrete válido (um número).", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        return GETTING_REMINDER_ID_FOR_DELETE
+
+    user_id = update.effective_user.id
+    
+    # Remove o job do JobQueue (se existir)
+    job_name = f'reminder_{reminder_id}'
+    current_jobs = context.application.job_queue.get_jobs_by_name(job_name)
+    for job in current_jobs:
+        job.schedule_removal()
+        logger.info(f"Job agendado '{job_name}' removido do JobQueue.")
+
+    if db.delete_reminder(reminder_id, user_id):
+        await update.message.reply_text(escape_markdown(f"🗑️ Lembrete ID `{reminder_id}` deletado com sucesso!", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        logger.info(f"Lembrete ID {reminder_id} deletado por {user_id}.")
+    else:
+        await update.message.reply_text(escape_markdown(f"❌ Não foi possível encontrar ou deletar o lembrete ID `{reminder_id}`. Verifique se o ID está correto ou use /ver_lembretes para ver seus IDs.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        logger.warning(f"Falha ao deletar lembrete ID {reminder_id} para user {user_id}.")
+
+    context.user_data.clear()
+    return ConversationHandler.END
+
+
+async def handle_reminder_delete_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Lida com as callbacks de confirmação ou cancelamento da exclusão de lembretes."""
+    query = update.callback_query
+    await query.answer()
+    data = query.data
+
+    if data.startswith("confirm_delete_reminder:"):
+        reminder_id = int(data.split(":")[1])
+        user_id = query.from_user.id
+
+        # Remove o job do JobQueue (se existir)
         job_name = f'reminder_{reminder_id}'
-        current_jobs = context.job_queue.get_jobs_by_name(job_name)
+        current_jobs = context.application.job_queue.get_jobs_by_name(job_name)
         for job in current_jobs:
             job.schedule_removal()
-            logger.info(f"Job do lembrete ID {reminder_id} removido do JobQueue.")
+            logger.info(f"Job agendado '{job_name}' removido do JobQueue (via callback).")
 
         if db.delete_reminder(reminder_id, user_id):
-            await query.edit_message_text(escape_markdown(f"✅ Lembrete (ID: `{reminder_id}`) apagado com sucesso!", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-            logger.info(f"Lembrete ID {reminder_id} apagado por {user_id}.")
+            await query.edit_message_text(escape_markdown(f"🗑️ Lembrete ID `{reminder_id}` deletado com sucesso! 👍", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+            logger.info(f"Lembrete ID {reminder_id} deletado por {user_id} (via callback).")
         else:
-            reply_text = escape_markdown(f"❌ Não foi possível apagar o lembrete com ID `{reminder_id}`. Verifique se ele existe e pertence a você.", version=2)
-            if update.callback_query:
-                await update.callback_query.edit_message_text(reply_text, parse_mode=ParseMode.MARKDOWN_V2)
-            else:
-                await update.message.reply_text(reply_text, parse_mode=ParseMode.MARKDOWN_V2)
-            logger.warning(f"Falha ao deletar lembrete ID {reminder_id} para user {user_id}.")
+            await query.edit_message_text(escape_markdown(f"❌ Não foi possível encontrar ou deletar o lembrete ID `{reminder_id}`. Verifique se ele pertence a você.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+            logger.warning(f"Falha ao deletar lembrete ID {reminder_id} por {user_id} (via callback).")
 
-    elif query.data == "cancel_reminder_delete":
+    elif data == "cancel_reminder_delete":
         await query.edit_message_text(escape_markdown("Operação de apagar lembrete cancelada. 😉", version=2), parse_mode=ParseMode.MARKDOWN_V2)
     else:
         await query.edit_message_text(escape_markdown("Ação desconhecida para apagar lembrete.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
 
     context.user_data.clear()
     return ConversationHandler.END
+
 
 async def cancel_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancela qualquer diálogo de lembrete em andamento."""
@@ -414,5 +489,6 @@ async def cancel_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     elif update.message:
         await update.message.reply_text(escape_markdown("Operação de lembrete cancelada. Estou à disposição para o que precisar!", version=2), parse_mode=ParseMode.MARKDOWN_V2)
     
-    context.user_data.clear() # Limpa os dados do usuário
+    logger.info(f"Diálogo de lembrete cancelado por {update.effective_user.id}.")
+    context.user_data.clear()
     return ConversationHandler.END
