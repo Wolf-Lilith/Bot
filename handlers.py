@@ -1,3 +1,5 @@
+# handlers.py
+
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
@@ -6,217 +8,258 @@ import logging
 import db
 import re
 
-# Use um logger específico para o módulo handlers para melhor rastreamento
+# Usar o logger configurado em main.py
 logger = logging.getLogger(__name__)
 
-# Estados para ConversationHandler (Frases Personalizadas)
+# --- Estados para ConversationHandler (certifique-se de que são únicos globalmente) ---
 GETTING_TRIGGER_PHRASE = 0
 GETTING_RESPONSE_PHRASE = 1
 GETTING_PHRASE_ID_TO_DELETE = 2
 
+# --- Handlers de Comandos e Funções Auxiliares ---
+
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Inicia o bot e cumprimenta o usuário."""
     user = update.effective_user
     await update.message.reply_html(
-        f"Olá, {user.mention_html()}! Sou a Lilith, sua assistente pessoal.\\n"
+        f"Olá, {user.mention_html()}! Sou a Lilith, sua assistente pessoal.\n"
         "Use /ajuda para ver o que eu posso fazer!"
     )
     logger.info(f"Comando /start recebido de {user.id}.")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Mostra o menu de ajuda principal."""
     user_id = update.effective_user.id
-    await send_main_help_menu(update, context, update.message.message_id, update.message.chat_id)
+    # Quando o comando /ajuda é chamado, sempre envia uma NOVA mensagem de ajuda.
+    # A função send_main_help_menu decide se edita ou envia com base no 'update'.
+    await send_main_help_menu(update, context)
     logger.info(f"Comando /ajuda recebido de {user_id}.")
 
-async def send_main_help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, message_id=None, chat_id=None):
+async def send_main_help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Função auxiliar para enviar/editar o menu de ajuda principal."""
     keyboard = [
         [InlineKeyboardButton("Frases Personalizadas", callback_data="help_category:phrases")],
         [InlineKeyboardButton("Listas", callback_data="help_category:lists")],
         [InlineKeyboardButton("Lembretes", callback_data="help_category:reminders")],
-        [InlineKeyboardButton("Contas Financeiras", callback_data="help_category:accounts")], # Adicionado para o menu de ajuda
-        [InlineKeyboardButton("Comandos Gerais", callback_data="help_category:general")]
+        [InlineKeyboardButton("Comandos Gerais", callback_data="help_category:general")],
+        [InlineKeyboardButton("Contas Financeiras", callback_data="help_category:accounts")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    help_text = escape_markdown(
-        "Selecione uma categoria para ver os comandos disponíveis:", version=2
-    )
+    commands = db.get_all_commands()
+    help_message = "Aqui estão os comandos que eu conheço:\n\n"
+    if commands:
+        for cmd_name, desc in commands:
+            # Escapa o MarkdownV2 para garantir que não quebre a formatação
+            display_cmd = escape_markdown(cmd_name.replace("_", r"\_"), version=2)
+            display_desc = escape_markdown((desc or ""), version=2)
+            help_message += f"*{display_cmd}*: {display_desc}\n"
+    else:
+        help_message += "Nenhum comando registrado no momento."
 
-    if message_id and chat_id:
-        await context.bot.edit_message_text(
-            chat_id=chat_id,
-            message_id=message_id,
-            text=help_text,
+    # Decide se edita uma mensagem existente (de um callback) ou envia uma nova (de um comando)
+    if update.callback_query:
+        query = update.callback_query
+        await query.answer() # Confirma que o callback foi recebido
+        await query.edit_message_text( # Edita a mensagem de onde o callback veio
+            text=escape_markdown(help_message, version=2),
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
+        logger.info(f"Menu de ajuda editado via callback para {query.from_user.id}.")
+    elif update.message:
+        await update.message.reply_text( # Envia uma nova mensagem em resposta ao comando
+            text=escape_markdown(help_message, version=2),
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        logger.info(f"Menu de ajuda enviado via comando para {update.effective_user.id}.")
     else:
-        await update.message.reply_text(help_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
-    logger.info(f"Menu de ajuda principal enviado.")
+        logger.warning("send_main_help_menu foi chamado sem update.message ou update.callback_query.")
 
-
-async def handle_help_category_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Lida com a seleção de categoria no menu de ajuda."""
+async def send_help_category_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Mostra o menu de ajuda para categorias específicas."""
     query = update.callback_query
     await query.answer()
-    category = query.data.split(':')[1]
-    user_id = query.from_user.id
+    category = query.data.split(':')[1] # help_category:phrases -> phrases
 
-    commands = db.get_all_commands()
-    category_commands = []
-    category_title = ""
-
+    category_message = ""
+    # Define os comandos e a mensagem para cada categoria
     if category == "phrases":
-        category_title = "📚 Frases Personalizadas"
-        category_commands = [cmd for cmd, func_name, desc in commands if "phrase" in func_name or "frase" in func_name.lower()]
+        category_message = (
+            "⚙️ *Frases Personalizadas:*\n"
+            "* `/addfrase` - Adiciona uma nova frase que eu devo responder.\n"
+            "* `/minhasfrases` - Vê todas as frases que você me ensinou.\n"
+            "* `/apagarfrase` - Apaga uma das suas frases personalizadas.\n\n"
+            "Eu responderei automaticamente quando vir a sua frase de gatilho!"
+        )
     elif category == "lists":
-        category_title = "📝 Listas"
-        category_commands = [cmd for cmd, func_name, desc in commands if "list" in func_name or "lista" in func_name.lower()]
+        category_message = (
+            "📝 *Listas:*\n"
+            "* `/novalista` - Cria uma nova lista (ex: compras, tarefas).\n"
+            "* `/listas` - Vê todas as suas listas.\n"
+            "* `/verlista` - Vê os itens de uma lista específica.\n"
+            "* `/additem` - Adiciona um item a uma lista existente.\n"
+            "* `/marcaritem` - Marca um item da lista como completo ou incompleto.\n"
+            "* `/removeritem` - Remove um item de uma lista.\n"
+            "* `/apagarlista` - Apaga uma lista inteira.\n\n"
+            "Organize suas tarefas e compras facilmente!"
+        )
     elif category == "reminders":
-        category_title = "⏰ Lembretes"
-        category_commands = [cmd for cmd, func_name, desc in commands if "reminder" in func_name or "lembrete" in func_name.lower()]
-    elif category == "accounts": # Nova categoria
-        category_title = "💰 Contas Financeiras"
-        category_commands = [cmd for cmd, func_name, desc in commands if "account" in func_name or "contas" in func_name.lower() or "income" in func_name.lower()]
+        category_message = (
+            "⏰ *Lembretes:*\n"
+            "* `/add_lembrete` - Adiciona um novo lembrete com data e hora.\n"
+            "* `/ver_lembretes` - Vê todos os seus lembretes.\n"
+            "* `/apagar_lembrete` - Apaga um lembrete existente.\n\n"
+            "Nunca mais esqueça de nada importante!"
+        )
     elif category == "general":
-        category_title = "✨ Comandos Gerais"
-        # Filtra comandos gerais (start, ajuda, cancelar e outros que não se encaixam nas categorias acima)
-        specific_commands_functions = [
-            "start_command", "help_command", "send_main_help_menu", "add_phrase_start", "view_my_phrases",
-            "delete_phrase_start", "new_list_start", "list_my_lists", "add_item_start", "toggle_item_start",
-            "remove_item_start", "delete_list_start", "add_reminder_start", "view_reminders",
-            "delete_reminder_start", "accounts_menu_start", "add_account_start", "add_income_start",
-            "delete_account_start", "delete_income_start", "mark_account_paid_start"
-        ]
-        category_commands = [cmd for cmd, func_name, desc in commands if func_name.split('.')[-1] not in specific_commands_functions]
-        # Adiciona /start, /ajuda e /cancelar explicitamente se não estiverem já
-        if ("start", "handlers.start_command", "Inicia o bot e te cumprimenta.") not in commands:
-            category_commands.append(("start", "handlers.start_command", "Inicia o bot e te cumprimenta."))
-        if ("ajuda", "handlers.help_command", "Mostra o menu de ajuda interativo.") not in commands:
-            category_commands.append(("ajuda", "handlers.help_command", "Mostra o menu de ajuda interativo."))
-        if ("cancelar", "handlers.cancel_dialog", "Cancela a operação atual.") not in commands: # Supondo que você queira adicionar um db.insert para cancelar
-             category_commands.append(("cancelar", "handlers.cancel_dialog", "Cancela a operação atual."))
-        
-        # Remove duplicatas e garante a ordem
-        unique_commands = []
-        seen_commands = set()
-        for cmd_tuple in category_commands:
-            if cmd_tuple[0] not in seen_commands:
-                unique_commands.append(cmd_tuple)
-                seen_commands.add(cmd_tuple[0])
-        category_commands = sorted(unique_commands, key=lambda x: x[0]) # Ordena alfabeticamente
-
-    if not category_commands:
-        response_text = f"Nenhum comando encontrado para a categoria '{category_title}'. 😕"
+        category_message = (
+            "✨ *Comandos Gerais:*\n"
+            "* `/start` - Inicia uma conversa comigo e te cumprimenta.\n"
+            "* `/ajuda` - Mostra este menu de ajuda.\n"
+            "* `/cancelar` - Cancela qualquer operação em andamento.\n\n"
+            "Estou sempre aprendendo e disponível para te ajudar!"
+        )
+    elif category == "accounts":
+        category_message = (
+            "💰 *Contas Financeiras:*\n"
+            "* `/contas` - Abre o menu de gerenciamento de contas.\n"
+            "  * Adicionar conta/despesa\n"
+            "  * Adicionar entrada (salário, renda extra)\n"
+            "  * Marcar conta como paga\n"
+            "  * Ver saldo e contas\n"
+            "  * Deletar contas/entradas\n\n"
+            "Mantenha suas finanças organizadas!"
+        )
     else:
-        response_text = f"**{escape_markdown(category_title, version=2)}**\\n\\n"
-        for cmd, func_name, desc in commands:
-            if cmd in [c[0] for c in category_commands] and desc: # Apenas comandos que pertencem a esta categoria e que tem descrição
-                 response_text += f"*{escape_markdown('/' + cmd, version=2)}*: {escape_markdown(desc, version=2)}\\n"
+        category_message = "Categoria de ajuda desconhecida."
 
-    keyboard = [[InlineKeyboardButton("⬅️ Voltar ao Menu Principal", callback_data="help_category:main_menu")]]
+    keyboard = [
+        [InlineKeyboardButton("⬅️ Voltar ao Menu Principal", callback_data="help_category:main_menu")]
+    ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     await query.edit_message_text(
-        text=response_text,
+        text=escape_markdown(category_message, version=2),
         reply_markup=reply_markup,
         parse_mode=ParseMode.MARKDOWN_V2
     )
-    logger.info(f"Menu de ajuda da categoria '{category}' exibido para {user_id}.")
+    logger.info(f"Menu de ajuda da categoria '{category}' enviado para {query.from_user.id}.")
+    return ConversationHandler.END
 
 
-# --- Funções de Handler para Frases Personalizadas ---
+# --- Funções para Frases Personalizadas ---
 
-async def add_phrase_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def new_phrase_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Inicia o diálogo para adicionar uma nova frase."""
-    await update.message.reply_text("Certo! Qual frase você quer que eu detecte? (Ex: 'bom dia')")
-    logger.info(f"Diálogo 'addfrase' iniciado por {update.effective_user.id}.")
+    user_id = update.effective_user.id
+    logger.info(f"Comando /addfrase recebido de {user_id}.")
+    await update.message.reply_text("Qual frase ou palavra deve *ativar* a minha resposta?")
     return GETTING_TRIGGER_PHRASE
 
 async def get_trigger_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Recebe a frase de gatilho e pede a frase de resposta."""
-    context.user_data['trigger_phrase'] = update.message.text
-    await update.message.reply_text(f"Ok! Quando alguém disser '{update.message.text}', o que você quer que eu responda?")
-    logger.info(f"Frase de gatilho '{update.message.text}' recebida de {update.effective_user.id}.")
+    user_id = update.effective_user.id
+    trigger_phrase = update.message.text.strip()
+    if not trigger_phrase:
+        await update.message.reply_text("A frase de gatilho não pode ser vazia. Tente novamente.")
+        return GETTING_TRIGGER_PHRASE
+
+    context.user_data['trigger_phrase'] = trigger_phrase
+    logger.info(f"Gatilho '{trigger_phrase}' recebido de {user_id}.")
+    await update.message.reply_text(f"Entendi! E qual deve ser a minha *resposta* para '{escape_markdown(trigger_phrase, version=2)}'?")
     return GETTING_RESPONSE_PHRASE
 
 async def get_response_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Recebe a frase de resposta e salva no banco de dados."""
+    """Recebe a frase de resposta e salva a frase personalizada."""
     user_id = update.effective_user.id
-    trigger_phrase = context.user_data['trigger_phrase']
-    response_phrase = update.message.text
+    response_phrase = update.message.text.strip()
+    trigger_phrase = context.user_data.get('trigger_phrase')
 
-    if db.insert_personal_phrase(user_id, trigger_phrase, response_phrase):
-        await update.message.reply_text(f"✨ Entendido! Frase '{trigger_phrase}' com resposta '{response_phrase}' adicionada!")
+    if not response_phrase:
+        await update.message.reply_text("A frase de resposta não pode ser vazia. Tente novamente.")
+        return GETTING_RESPONSE_PHRASE # CORRIGIDO AQUI: Typo de "PHASE" para "PHRASE"
+
+    if db.add_personal_phrase(user_id, trigger_phrase, response_phrase):
+        await update.message.reply_text(
+            escape_markdown(f"🎉 Frase personalizada adicionada!\nQuando você disser: '{trigger_phrase}'\nEu responderei: '{response_phrase}'", version=2),
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
         logger.info(f"Frase personalizada adicionada por {user_id}: '{trigger_phrase}' -> '{response_phrase}'.")
     else:
-        await update.message.reply_text(f"❌ Ops! Não consegui adicionar a frase. Talvez você já tenha essa frase de gatilho registrada?")
-        logger.warning(f"Falha ao adicionar frase personalizada por {user_id}. Gatilho: '{trigger_phrase}'.")
-
+        await update.message.reply_text(
+            escape_markdown("❌ Ops! Já existe uma frase com esse gatilho. Use /minhasfrases para ver suas frases.", version=2),
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        logger.warning(f"Falha ao adicionar frase, gatilho '{trigger_phrase}' já existe para {user_id}.")
+    
     context.user_data.clear()
     return ConversationHandler.END
 
 async def view_my_phrases(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Exibe as frases personalizadas do usuário."""
+    """Vê as frases personalizadas do usuário."""
     user_id = update.effective_user.id
-    phrases = db.get_personal_phrases(user_id)
-
-    if not phrases:
-        await update.message.reply_text("Você ainda não tem nenhuma frase personalizada. Use /addfrase para adicionar uma!")
-        logger.info(f"Nenhuma frase personalizada para {user_id}.")
-        return
-
-    message_text = "Suas frases personalizadas:\\n\\n"
-    for phrase in phrases:
-        message_text += f"**ID:** `{phrase['id']}`\\n" \
-                        f"**Gatilho:** {escape_markdown(phrase['trigger_phrase'], version=2)}\\n" \
-                        f"**Resposta:** {escape_markdown(phrase['response_phrase'], version=2)}\\n\\n"
-    
-    message_text += "Use /apagarfrase <ID> para remover uma."
-
-    await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN_V2)
-    logger.info(f"Frases personalizadas exibidas para {user_id}.")
+    phrases = db.get_user_personal_phrases(user_id)
+    if phrases:
+        message_text = "📚 Suas frases personalizadas:\n\n"
+        for phrase_id, trigger, response in phrases:
+            # Escapa o MarkdownV2 para garantir a exibição correta
+            escaped_trigger = escape_markdown(trigger, version=2)
+            escaped_response = escape_markdown(response, version=2)
+            message_text += f"**ID: {phrase_id}**\n`Gatilho`: {escaped_trigger}\n`Resposta`: {escaped_response}\n\n"
+        await update.message.reply_text(message_text, parse_mode=ParseMode.MARKDOWN_V2)
+        logger.info(f"Frases personalizadas exibidas para {user_id}.")
+    else:
+        await update.message.reply_text("Você ainda não adicionou nenhuma frase personalizada. Use /addfrase para adicionar uma!")
+        logger.info(f"Nenhuma frase personalizada encontrada para {user_id}.")
 
 async def delete_phrase_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Inicia o diálogo para apagar uma frase personalizada."""
-    args = context.args
-    if not args:
-        await update.message.reply_text("Qual o ID da frase que você quer apagar? (Use /minhasfrases para ver os IDs)")
-        return GETTING_PHRASE_ID_TO_DELETE
-    
-    try:
-        phrase_id = int(args[0])
-        user_id = update.effective_user.id
-        
-        if db.delete_personal_phrase(phrase_id, user_id):
-            await update.message.reply_text(f"🗑️ Frase ID {phrase_id} apagada com sucesso!")
-            logger.info(f"Frase ID {phrase_id} apagada por {user_id} via comando direto.")
-        else:
-            await update.message.reply_text(f"❌ Não foi possível apagar a frase ID {phrase_id}. Verifique se o ID está correto ou se a frase pertence a você.")
-            logger.warning(f"Falha ao apagar frase ID {phrase_id} por {user_id} via comando direto.")
-        return ConversationHandler.END
-    except ValueError:
-        await update.message.reply_text("Por favor, digite um ID de frase válido (um número).")
-        return GETTING_PHRASE_ID_TO_DELETE
-
-async def confirm_delete_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Confirma e apaga a frase personalizada com base no ID fornecido."""
-    try:
-        phrase_id = int(update.message.text)
-    except ValueError:
-        await update.message.reply_text("Por favor, digite um ID de frase válido (um número).")
-        return GETTING_PHRASE_ID_TO_DELETE
-
+    """Inicia o diálogo para apagar uma frase."""
     user_id = update.effective_user.id
+    logger.info(f"Comando /apagarfrase recebido de {user_id}.")
+    phrases = db.get_user_personal_phrases(user_id)
+    if not phrases:
+        await update.message.reply_text("Você não tem nenhuma frase personalizada para apagar.")
+        return ConversationHandler.END
+
+    phrases_list = "📚 Suas frases personalizadas:\n\n"
+    for phrase_id, trigger, response in phrases:
+        escaped_trigger = escape_markdown(trigger, version=2)
+        escaped_response = escape_markdown(response, version=2)
+        phrases_list += f"**ID: {phrase_id}**\n`Gatilho`: {escaped_trigger}\n`Resposta`: {escaped_response}\n\n"
+    
+    phrases_list += "Por favor, me diga o *ID* da frase que você quer apagar."
+    await update.message.reply_text(phrases_list, parse_mode=ParseMode.MARKDOWN_V2)
+    return GETTING_PHRASE_ID_TO_DELETE
+
+async def delete_phrase_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Confirma e apaga a frase personalizada."""
+    user_id = update.effective_user.id
+    try:
+        phrase_id = int(update.message.text.strip())
+    except ValueError:
+        await update.message.reply_text(
+            escape_markdown("Por favor, insira um ID de frase válido (um número).", version=2),
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        return GETTING_PHRASE_ID_TO_DELETE
+
     if db.delete_personal_phrase(phrase_id, user_id):
-        await update.message.reply_text(f"🗑️ Frase ID {phrase_id} apagada com sucesso!")
+        await update.message.reply_text(
+            escape_markdown(f"🗑️ Frase ID **{phrase_id}** apagada com sucesso!", version=2),
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
+        logger.info(f"Frase ID {phrase_id} apagada por {user_id}.")
     else:
-        await update.message.reply_text(f"❌ Não foi possível apagar a frase ID {phrase_id}. Verifique se o ID está correto.")
+        await update.message.reply_text(
+            escape_markdown(f"❌ Não foi possível apagar a frase ID **{phrase_id}**. Verifique se o ID está correto.", version=2),
+            parse_mode=ParseMode.MARKDOWN_V2
+        )
         logger.warning(f"Falha ao apagar frase ID {phrase_id} por {user_id}.")
 
-    context.user_data.clear() # Limpa os dados do usuário para encerrar o diálogo
+    context.user_data.clear()
     return ConversationHandler.END
-
 
 async def handle_personal_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Lida com mensagens que podem ser frases personalizadas."""
@@ -231,15 +274,17 @@ async def handle_personal_phrase(update: Update, context: ContextTypes.DEFAULT_T
 
 async def cancel_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Cancela qualquer diálogo em andamento."""
+    # update.callback_query pode vir de um botão "Cancelar"
     if update.callback_query:
         await update.callback_query.answer()
         if update.callback_query.data == "help_category:main_menu":
-            await send_main_help_menu(update, context, update.callback_query.message.message_id, update.callback_query.message.chat_id)
+            # Se for para voltar ao menu principal de ajuda via callback, chama a função correta
+            await send_main_help_menu(update, context)
         else:
             await update.callback_query.edit_message_text(escape_markdown("Operação cancelada.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
     elif update.message:
         await update.message.reply_text(escape_markdown("Operação cancelada. Estou à disposição para o que precisar!", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-
+    
     logger.info(f"Diálogo cancelado por {update.effective_user.id}.")
-    context.user_data.clear()
+    context.user_data.clear() # Limpa os dados do usuário para encerrar o diálogo
     return ConversationHandler.END

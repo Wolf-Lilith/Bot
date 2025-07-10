@@ -1,3 +1,5 @@
+# db.py
+
 import sqlite3
 import logging
 import datetime
@@ -8,14 +10,17 @@ from dateutil import parser # Importado para parsing flexível de datas
 # Use um logger específico para o módulo db para melhor rastreamento
 logger = logging.getLogger(__name__)
 
-DATABASE_NAME = 'lilith_bot.db' # Certifique-se de que o nome do seu banco é o mesmo
+# Nome do banco de dados unificado
+DATABASE_NAME = 'lilith_bot.db' 
 
 def create_tables():
+    """Cria as tabelas necessárias no banco de dados se elas não existirem."""
     conn = None # Inicializa conn para None
     try:
         conn = sqlite3.connect(DATABASE_NAME) # Esta linha deve criar o arquivo se ele não existir
         cursor = conn.cursor()
 
+        # Tabela para registrar comandos do bot
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS commands (
                 command_name TEXT UNIQUE NOT NULL,
@@ -24,59 +29,65 @@ def create_tables():
             )
         ''')
 
+        # Tabela para frases personalizadas do usuário
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS personal_phrases (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 trigger_phrase TEXT NOT NULL,
                 response_phrase TEXT NOT NULL,
-                UNIQUE(user_id, trigger_phrase)
+                UNIQUE(user_id, trigger_phrase) ON CONFLICT REPLACE
             )
         ''')
 
+        # Tabela para listas de usuário
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS lists (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 list_name TEXT NOT NULL,
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, list_name)
+                UNIQUE(user_id, list_name) ON CONFLICT REPLACE
             )
         ''')
 
+        # Tabela para itens dentro das listas
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS list_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 list_id INTEGER NOT NULL,
                 item_text TEXT NOT NULL,
-                is_completed INTEGER DEFAULT 0,
+                is_completed INTEGER DEFAULT 0, -- 0 for false, 1 for true
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
                 FOREIGN KEY (list_id) REFERENCES lists(id) ON DELETE CASCADE
             )
         ''')
 
+        # Tabela para lembretes
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS reminders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 user_id INTEGER NOT NULL,
                 description TEXT NOT NULL,
-                scheduled_time TEXT NOT NULL, -- Armazenar como ISO 8601 string (com UTC)
-                recurrence TEXT, -- 'daily', 'weekly', 'monthly', 'yearly', ou NULL para não recorrente
-                active INTEGER DEFAULT 1, -- 1 para ativo, 0 para inativo
+                scheduled_time TEXT NOT NULL, -- ISO format string (YYYY-MM-DD HH:MM:SS+00:00)
+                recurrence TEXT DEFAULT 'none', -- 'none', 'daily', 'weekly', 'monthly', 'yearly'
+                active INTEGER DEFAULT 1, -- 1 for active, 0 for inactive
+                job_id TEXT UNIQUE, -- ID do job no JobQueue para fácil cancelamento/rastreamento
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP
             )
         ''')
+
         conn.commit()
-        logger.info("Tabelas verificadas/criadas no banco de dados.")
+        logger.info("Tabelas do banco de dados criadas ou já existentes.")
     except sqlite3.Error as e:
-        logger.error(f"Erro de SQLite ao criar tabelas: {e}")
-    except Exception as e:
-        logger.error(f"Erro inesperado ao criar tabelas: {e}")
+        logger.error(f"Erro ao criar tabelas: {e}")
     finally:
         if conn:
             conn.close()
 
-def insert_command(command_name, function_name, description):
+# --- Funções para Comandos ---
+def insert_command(command_name, function_name, description=None):
+    """Insere um novo comando no banco de dados se ele não existir."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
@@ -86,59 +97,61 @@ def insert_command(command_name, function_name, description):
         if cursor.rowcount > 0:
             logger.info(f"Comando '{command_name}' inserido no DB.")
         else:
-            logger.info(f"Comando '{command_name}' verificado no DB.")
-    except Exception as e:
-        logger.error(f"Erro ao inserir/verificar comando '{command_name}': {e}")
+            logger.debug(f"Comando '{command_name}' já existe no DB.")
+        return True
+    except sqlite3.Error as e:
+        logger.error(f"Erro ao inserir comando '{command_name}': {e}")
+        return False
+    finally:
+        conn.close()
+
+def get_all_commands():
+    """Retorna todos os comandos registrados no banco de dados."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT command_name, description FROM commands ORDER BY command_name")
+        return cursor.fetchall()
+    except sqlite3.Error as e:
+        logger.error(f"Erro ao buscar todos os comandos: {e}")
+        return []
     finally:
         conn.close()
 
 # --- Funções para Frases Personalizadas ---
-def add_personal_phrase(user_id, trigger, response):
+def add_personal_phrase(user_id, trigger_phrase, response_phrase):
+    """Adiciona uma nova frase personalizada para um usuário."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
         cursor.execute("INSERT INTO personal_phrases (user_id, trigger_phrase, response_phrase) VALUES (?, ?, ?)",
-                       (user_id, trigger, response))
+                       (user_id, trigger_phrase, response_phrase))
         conn.commit()
-        return cursor.lastrowid
-    except sqlite3.IntegrityError:
-        logger.warning(f"Tentativa de adicionar frase duplicada para user {user_id} com trigger '{trigger}'.")
-        return None # Indica que a frase já existe
+        return True
+    except sqlite3.IntegrityError: # Captura erro de UNIQUE constraint
+        logger.warning(f"Frase '{trigger_phrase}' já existe para user {user_id}. Não adicionado.")
+        return False
     except Exception as e:
-        logger.error(f"Erro ao adicionar frase personalizada para user {user_id}: {e}")
-        return None
+        logger.error(f"Erro ao adicionar frase personalizada: {e}")
+        return False
     finally:
         conn.close()
 
 def get_user_personal_phrases(user_id):
+    """Retorna todas as frases personalizadas de um usuário."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id, trigger_phrase, response_phrase FROM personal_phrases WHERE user_id = ?", (user_id,))
-        phrases = []
-        for row in cursor.fetchall():
-            phrases.append({'id': row[0], 'trigger_phrase': row[1], 'response_phrase': row[2]})
-        return phrases
+        cursor.execute("SELECT id, trigger_phrase, response_phrase FROM personal_phrases WHERE user_id = ? ORDER BY trigger_phrase", (user_id,))
+        return cursor.fetchall()
     except Exception as e:
         logger.error(f"Erro ao buscar frases personalizadas para user {user_id}: {e}")
         return []
     finally:
         conn.close()
 
-def delete_personal_phrase(phrase_id, user_id):
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("DELETE FROM personal_phrases WHERE id = ? AND user_id = ?", (phrase_id, user_id))
-        conn.commit()
-        return cursor.rowcount > 0
-    except Exception as e:
-        logger.error(f"Erro ao deletar frase personalizada ID {phrase_id} para user {user_id}: {e}")
-        return False
-    finally:
-        conn.close()
-
 def get_response_for_trigger(user_id, trigger_phrase):
+    """Retorna a frase de resposta para um gatilho específico de um usuário."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
@@ -147,98 +160,125 @@ def get_response_for_trigger(user_id, trigger_phrase):
         result = cursor.fetchone()
         return result[0] if result else None
     except Exception as e:
-        logger.error(f"Erro ao buscar resposta para trigger '{trigger_phrase}' de user {user_id}: {e}")
+        logger.error(f"Erro ao buscar resposta para gatilho '{trigger_phrase}' de user {user_id}: {e}")
         return None
     finally:
         conn.close()
 
+def delete_personal_phrase(phrase_id, user_id):
+    """Apaga uma frase personalizada pelo ID para um usuário específico."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("DELETE FROM personal_phrases WHERE id = ? AND user_id = ?", (phrase_id, user_id))
+        conn.commit()
+        return cursor.rowcount > 0
+    except Exception as e:
+        logger.error(f"Erro ao deletar frase ID {phrase_id} para user {user_id}: {e}")
+        return False
+    finally:
+        conn.close()
+
 # --- Funções para Listas ---
-def create_list(user_id, list_name):
+def add_list(user_id, list_name):
+    """Adiciona uma nova lista para um usuário."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
         cursor.execute("INSERT INTO lists (user_id, list_name) VALUES (?, ?)", (user_id, list_name))
         conn.commit()
-        return cursor.lastrowid
+        return True
     except sqlite3.IntegrityError:
-        logger.warning(f"Lista '{list_name}' já existe para o usuário {user_id}.")
-        return None
+        logger.warning(f"Lista '{list_name}' já existe para user {user_id}. Não adicionada.")
+        return False
     except Exception as e:
-        logger.error(f"Erro ao criar lista para user {user_id}: {e}")
-        return None
+        logger.error(f"Erro ao adicionar lista: {e}")
+        return False
     finally:
         conn.close()
 
 def get_user_lists(user_id):
+    """Retorna todas as listas de um usuário."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id, list_name FROM lists WHERE user_id = ?", (user_id,))
-        lists = []
-        for row in cursor.fetchall():
-            lists.append({'id': row[0], 'name': row[1]})
-        return lists
+        cursor.execute("SELECT id, list_name FROM lists WHERE user_id = ? ORDER BY list_name", (user_id,))
+        return cursor.fetchall()
     except Exception as e:
         logger.error(f"Erro ao buscar listas para user {user_id}: {e}")
         return []
     finally:
         conn.close()
 
-def get_list_name(list_id, user_id):
+def get_list_by_name(user_id, list_name):
+    """Retorna o ID e nome de uma lista pelo nome para um usuário específico."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT list_name FROM lists WHERE id = ? AND user_id = ?", (list_id, user_id))
-        result = cursor.fetchone()
-        return result[0] if result else None
+        cursor.execute("SELECT id, list_name FROM lists WHERE user_id = ? AND list_name = ?", (user_id, list_name))
+        return cursor.fetchone()
     except Exception as e:
-        logger.error(f"Erro ao buscar nome da lista ID {list_id} para user {user_id}: {e}")
+        logger.error(f"Erro ao buscar lista '{list_name}' para user {user_id}: {e}")
+        return None
+    finally:
+        conn.close()
+
+def get_list_by_id(list_id, user_id):
+    """Retorna o ID e nome de uma lista pelo ID para um usuário específico."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute("SELECT id, list_name FROM lists WHERE id = ? AND user_id = ?", (list_id, user_id))
+        return cursor.fetchone()
+    except Exception as e:
+        logger.error(f"Erro ao buscar lista ID {list_id} para user {user_id}: {e}")
         return None
     finally:
         conn.close()
 
 def add_list_item(list_id, item_text):
+    """Adiciona um item a uma lista."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
         cursor.execute("INSERT INTO list_items (list_id, item_text) VALUES (?, ?)", (list_id, item_text))
         conn.commit()
-        return cursor.lastrowid
+        return True
     except Exception as e:
-        logger.error(f"Erro ao adicionar item à lista ID {list_id}: {e}")
-        return None
+        logger.error(f"Erro ao adicionar item '{item_text}' à lista {list_id}: {e}")
+        return False
     finally:
         conn.close()
 
 def get_list_items(list_id):
+    """Retorna todos os itens de uma lista."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id, item_text, is_completed FROM list_items WHERE list_id = ?", (list_id,))
-        items = []
-        for row in cursor.fetchall():
-            items.append({'id': row[0], 'text': row[1], 'completed': bool(row[2])})
-        return items
+        cursor.execute("SELECT id, item_text, is_completed FROM list_items WHERE list_id = ? ORDER BY created_at", (list_id,))
+        return cursor.fetchall()
     except Exception as e:
-        logger.error(f"Erro ao buscar itens para lista ID {list_id}: {e}")
+        logger.error(f"Erro ao buscar itens para lista {list_id}: {e}")
         return []
     finally:
         conn.close()
 
-def toggle_list_item_status(item_id, list_id):
+def toggle_list_item(item_id, list_id):
+    """Alterna o status de conclusão de um item da lista."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute("UPDATE list_items SET is_completed = 1 - is_completed WHERE id = ? AND list_id = ?", (item_id, list_id))
+        cursor.execute("UPDATE list_items SET is_completed = (CASE WHEN is_completed = 0 THEN 1 ELSE 0 END) WHERE id = ? AND list_id = ?", (item_id, list_id))
         conn.commit()
         return cursor.rowcount > 0
     except Exception as e:
-        logger.error(f"Erro ao alternar status do item ID {item_id} da lista ID {list_id}: {e}")
+        logger.error(f"Erro ao alternar item ID {item_id} da lista {list_id}: {e}")
         return False
     finally:
         conn.close()
 
 def remove_list_item(item_id, list_id):
+    """Remove um item de uma lista."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
@@ -246,16 +286,17 @@ def remove_list_item(item_id, list_id):
         conn.commit()
         return cursor.rowcount > 0
     except Exception as e:
-        logger.error(f"Erro ao remover item ID {item_id} da lista ID {list_id}: {e}")
+        logger.error(f"Erro ao remover item ID {item_id} da lista {list_id}: {e}")
         return False
     finally:
         conn.close()
 
 def delete_list(list_id, user_id):
+    """Apaga uma lista e todos os seus itens."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        # A cascade delete na criação da tabela garante que os itens são apagados
+        # A FOREIGN KEY com ON DELETE CASCADE em list_items garante que os itens sejam apagados automaticamente
         cursor.execute("DELETE FROM lists WHERE id = ? AND user_id = ?", (list_id, user_id))
         conn.commit()
         return cursor.rowcount > 0
@@ -265,116 +306,38 @@ def delete_list(list_id, user_id):
     finally:
         conn.close()
 
+
 # --- Funções para Lembretes ---
-def add_reminder(user_id, description, scheduled_time, recurrence=None):
+def add_reminder(user_id, description, scheduled_time, recurrence, job_id=None):
+    """Adiciona um novo lembrete."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        # Garante que scheduled_time é uma string ISO formatada (UTC)
-        if isinstance(scheduled_time, datetime.datetime):
-            if scheduled_time.tzinfo is None:
-                # Assume UTC se for naive, ou use seu DEFAULT_TIMEZONE
-                scheduled_time = pytz.utc.localize(scheduled_time)
-            scheduled_time_iso = scheduled_time.astimezone(pytz.utc).isoformat()
-        else:
-            scheduled_time_iso = scheduled_time # Já deve vir como string ISO, mas bom garantir
-
-        cursor.execute(
-            "INSERT INTO reminders (user_id, description, scheduled_time, recurrence) VALUES (?, ?, ?, ?)",
-            (user_id, description, scheduled_time_iso, recurrence)
-        )
+        cursor.execute("INSERT INTO reminders (user_id, description, scheduled_time, recurrence, job_id) VALUES (?, ?, ?, ?, ?)",
+                       (user_id, description, scheduled_time.isoformat(), recurrence, job_id))
         conn.commit()
         return cursor.lastrowid
+    except sqlite3.IntegrityError:
+        logger.warning(f"Job ID '{job_id}' para lembrete já existe. Não adicionado.")
+        return None
     except Exception as e:
         logger.error(f"Erro ao adicionar lembrete para user {user_id}: {e}")
         return None
     finally:
         conn.close()
 
-def get_all_reminders_for_scheduling():
-    """Retorna todos os lembretes ativos para serem agendados na inicialização do bot."""
+def update_reminder_scheduled_time(reminder_id, new_scheduled_time, new_job_id=None):
+    """Atualiza a próxima data/hora de agendamento de um lembrete e opcionalmente o job_id."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id, user_id, description, scheduled_time, recurrence FROM reminders WHERE active = 1")
-        reminders = []
-        for row in cursor.fetchall():
-            # Converte a string ISO de volta para datetime aware
-            scheduled_time_dt = parser.parse(row[3])
-            # Se a string ISO não tem fuso, assume UTC (como salvamos)
-            if scheduled_time_dt.tzinfo is None:
-                scheduled_time_dt = pytz.utc.localize(scheduled_time_dt)
-            reminders.append({
-                'id': row[0],
-                'user_id': row[1],
-                'description': row[2],
-                'scheduled_time': scheduled_time_dt,
-                'recurrence': row[4]
-            })
-        return reminders
-    except Exception as e:
-        logger.error(f"Erro ao buscar todos os lembretes para agendamento: {e}")
-        return []
-    finally:
-        conn.close()
-
-def get_reminder_by_id(reminder_id):
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("SELECT id, user_id, description, scheduled_time, recurrence, active FROM reminders WHERE id = ?", (reminder_id,))
-        result = cursor.fetchone()
-        if result:
-            scheduled_time_dt = parser.parse(result[3])
-            if scheduled_time_dt.tzinfo is None:
-                scheduled_time_dt = pytz.utc.localize(scheduled_time_dt) # Assume UTC se for naive
-            return {
-                'id': result[0],
-                'user_id': result[1],
-                'description': result[2],
-                'scheduled_time': scheduled_time_dt,
-                'recurrence': result[4],
-                'active': bool(result[5])
-            }
-        return None
-    except Exception as e:
-        logger.error(f"Erro ao buscar lembrete ID {reminder_id}: {e}")
-        return None
-    finally:
-        conn.close()
-
-def deactivate_reminder(reminder_id):
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    try:
-        cursor.execute("UPDATE reminders SET active = 0 WHERE id = ?", (reminder_id,))
+        if new_job_id:
+            cursor.execute("UPDATE reminders SET scheduled_time = ?, job_id = ? WHERE id = ?",
+                           (new_scheduled_time.isoformat(), new_job_id, reminder_id))
+        else:
+            cursor.execute("UPDATE reminders SET scheduled_time = ? WHERE id = ?",
+                           (new_scheduled_time.isoformat(), reminder_id))
         conn.commit()
-        logger.info(f"Lembrete ID {reminder_id} desativado.")
-        return cursor.rowcount > 0
-    except Exception as e:
-        logger.error(f"Erro ao desativar lembrete ID {reminder_id}: {e}")
-        return False
-    finally:
-        conn.close()
-
-def update_reminder_scheduled_time(reminder_id, new_scheduled_time_dt: datetime.datetime):
-    conn = sqlite3.connect(DATABASE_NAME)
-    cursor = conn.cursor()
-    try:
-        if new_scheduled_time_dt.tzinfo is None:
-            # Se for 'naive', assume UTC para salvar, ou use seu DEFAULT_TIMEZONE se for o caso
-            # Idealmente, a data já virá 'aware' do handler.
-            new_scheduled_time_dt = pytz.utc.localize(new_scheduled_time_dt)
-        
-        # Converte para UTC e salva como ISO format string para consistência
-        scheduled_time_iso = new_scheduled_time_dt.astimezone(pytz.utc).isoformat()
-
-        cursor.execute(
-            "UPDATE reminders SET scheduled_time = ? WHERE id = ?",
-            (scheduled_time_iso, reminder_id)
-        )
-        conn.commit()
-        logger.info(f"Scheduled time para lembrete ID {reminder_id} atualizado para {scheduled_time_iso}.")
         return cursor.rowcount > 0
     except Exception as e:
         logger.error(f"Erro ao atualizar scheduled_time para lembrete ID {reminder_id}: {e}")
@@ -382,47 +345,80 @@ def update_reminder_scheduled_time(reminder_id, new_scheduled_time_dt: datetime.
     finally:
         conn.close()
 
-# --- NOVA FUNÇÃO: is_reminder_active ---
-def is_reminder_active(reminder_id):
-    """Verifica se um lembrete está ativo no banco de dados."""
+def deactivate_reminder(reminder_id):
+    """Desativa um lembrete (define active para 0)."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT active FROM reminders WHERE id = ?", (reminder_id,))
-        result = cursor.fetchone()
-        return result[0] == 1 if result else False
+        cursor.execute("UPDATE reminders SET active = 0 WHERE id = ?", (reminder_id,))
+        conn.commit()
+        return cursor.rowcount > 0
     except Exception as e:
-        logger.error(f"Erro ao verificar se lembrete ID {reminder_id} está ativo: {e}")
+        logger.error(f"Erro ao desativar lembrete ID {reminder_id}: {e}")
         return False
     finally:
         conn.close()
 
-# --- NOVO: Função para obter lembretes ativos de um usuário específico ---
-def get_active_reminders(user_id):
-    """Retorna todos os lembretes ativos para um usuário específico."""
+def get_user_reminders(user_id):
+    """Retorna todos os lembretes (ativos e inativos) para um usuário específico."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        cursor.execute("SELECT id, description, scheduled_time, recurrence FROM reminders WHERE user_id = ? AND active = 1 ORDER BY scheduled_time ASC", (user_id,))
+        cursor.execute("SELECT id, description, scheduled_time, recurrence, active FROM reminders WHERE user_id = ? ORDER BY scheduled_time ASC", (user_id,))
         reminders = []
         for row in cursor.fetchall():
+            # Converte a string ISO de volta para objeto datetime
             scheduled_time_dt = parser.parse(row[2])
-            if scheduled_time_dt.tzinfo is None:
-                scheduled_time_dt = pytz.utc.localize(scheduled_time_dt) # Assume UTC se for naive
             reminders.append({
                 'id': row[0],
                 'description': row[1],
                 'scheduled_time': scheduled_time_dt,
-                'recurrence': row[3]
+                'recurrence': row[3],
+                'active': bool(row[4])
             })
         return reminders
     except Exception as e:
-        logger.error(f"Erro ao buscar lembretes ativos para user {user_id}: {e}")
+        logger.error(f"Erro ao buscar lembretes para user {user_id}: {e}")
+        return []
+    finally:
+        conn.close()
+
+def get_active_reminders(user_id=None):
+    """Retorna todos os lembretes ativos (de todos os usuários ou de um específico)."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    try:
+        query = "SELECT id, user_id, description, scheduled_time, recurrence, job_id FROM reminders WHERE active = 1"
+        params = []
+        if user_id:
+            query += " AND user_id = ?"
+            params.append(user_id)
+        query += " ORDER BY scheduled_time ASC"
+
+        cursor.execute(query, tuple(params))
+        reminders = []
+        for row in cursor.fetchall():
+            scheduled_time_dt = parser.parse(row[3])
+            if scheduled_time_dt.tzinfo is None:
+                # Se não tem fuso horário, assume que é UTC (o que o JobQueue espera por padrão)
+                scheduled_time_dt = pytz.utc.localize(scheduled_time_dt)
+            reminders.append({
+                'id': row[0],
+                'user_id': row[1],
+                'description': row[2],
+                'scheduled_time': scheduled_time_dt,
+                'recurrence': row[4],
+                'job_id': row[5]
+            })
+        return reminders
+    except Exception as e:
+        logger.error(f"Erro ao buscar lembretes ativos: {e}")
         return []
     finally:
         conn.close()
 
 def delete_reminder(reminder_id, user_id):
+    """Deleta um lembrete pelo ID para um usuário específico."""
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
