@@ -1,5 +1,3 @@
-# handlers.py
-
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
 from telegram.constants import ParseMode
@@ -31,7 +29,6 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     """Mostra o menu de ajuda principal."""
     user_id = update.effective_user.id
     # Quando o comando /ajuda é chamado, sempre envia uma NOVA mensagem de ajuda.
-    # A função send_main_help_menu decide se edita ou envia com base no 'update'.
     await send_main_help_menu(update, context)
     logger.info(f"Comando /ajuda recebido de {user_id}.")
 
@@ -46,30 +43,23 @@ async def send_main_help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    commands = db.get_all_commands()
-    help_message = "Aqui estão os comandos que eu conheço:\n\n"
-    if commands:
-        for cmd_name, desc in commands:
-            # Escapa o MarkdownV2 para garantir que não quebre a formatação
-            display_cmd = escape_markdown(cmd_name.replace("_", r"\_"), version=2)
-            display_desc = escape_markdown((desc or ""), version=2)
-            help_message += f"*{display_cmd}*: {display_desc}\n"
-    else:
-        help_message += "Nenhum comando registrado no momento."
+    # REMOVIDO: A parte que exibia a lista de comandos em texto.
+    # Agora a mensagem inicial será mais concisa, focando nos botões.
+    help_message_text = "Selecione uma categoria de ajuda para ver os comandos:"
 
     # Decide se edita uma mensagem existente (de um callback) ou envia uma nova (de um comando)
     if update.callback_query:
         query = update.callback_query
         await query.answer() # Confirma que o callback foi recebido
         await query.edit_message_text( # Edita a mensagem de onde o callback veio
-            text=escape_markdown(help_message, version=2),
+            text=help_message_text, # Agora só a mensagem sem os comandos textuais
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
         logger.info(f"Menu de ajuda editado via callback para {query.from_user.id}.")
     elif update.message:
         await update.message.reply_text( # Envia uma nova mensagem em resposta ao comando
-            text=escape_markdown(help_message, version=2),
+            text=help_message_text, # Agora só a mensagem sem os comandos textuais
             reply_markup=reply_markup,
             parse_mode=ParseMode.MARKDOWN_V2
         )
@@ -77,7 +67,7 @@ async def send_main_help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         logger.warning("send_main_help_menu foi chamado sem update.message ou update.callback_query.")
 
-async def send_help_category_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+async def send_help_category_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Mostra o menu de ajuda para categorias específicas."""
     query = update.callback_query
     await query.answer()
@@ -132,6 +122,9 @@ async def send_help_category_menu(update: Update, context: ContextTypes.DEFAULT_
             "  * Deletar contas/entradas\n\n"
             "Mantenha suas finanças organizadas!"
         )
+    elif category == "main_menu":
+        await send_main_help_menu(update, context)
+        return
     else:
         category_message = "Categoria de ajuda desconhecida."
 
@@ -146,7 +139,6 @@ async def send_help_category_menu(update: Update, context: ContextTypes.DEFAULT_
         parse_mode=ParseMode.MARKDOWN_V2
     )
     logger.info(f"Menu de ajuda da categoria '{category}' enviado para {query.from_user.id}.")
-    return ConversationHandler.END
 
 
 # --- Funções para Frases Personalizadas ---
@@ -179,7 +171,7 @@ async def get_response_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if not response_phrase:
         await update.message.reply_text("A frase de resposta não pode ser vazia. Tente novamente.")
-        return GETTING_RESPONSE_PHRASE # CORRIGIDO AQUI: Typo de "PHASE" para "PHRASE"
+        return GETTING_RESPONSE_PHRASE
 
     if db.add_personal_phrase(user_id, trigger_phrase, response_phrase):
         await update.message.reply_text(
@@ -230,7 +222,12 @@ async def delete_phrase_start(update: Update, context: ContextTypes.DEFAULT_TYPE
         phrases_list += f"**ID: {phrase_id}**\n`Gatilho`: {escaped_trigger}\n`Resposta`: {escaped_response}\n\n"
     
     phrases_list += "Por favor, me diga o *ID* da frase que você quer apagar."
-    await update.message.reply_text(phrases_list, parse_mode=ParseMode.MARKDOWN_V2)
+    
+    # MUDANÇA AQUI: Escapar a string final antes de enviar com MarkdownV2
+    await update.message.reply_text(
+        escape_markdown(phrases_list, version=2),
+        parse_mode=ParseMode.MARKDOWN_V2
+    )
     return GETTING_PHRASE_ID_TO_DELETE
 
 async def delete_phrase_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -277,11 +274,7 @@ async def cancel_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     # update.callback_query pode vir de um botão "Cancelar"
     if update.callback_query:
         await update.callback_query.answer()
-        if update.callback_query.data == "help_category:main_menu":
-            # Se for para voltar ao menu principal de ajuda via callback, chama a função correta
-            await send_main_help_menu(update, context)
-        else:
-            await update.callback_query.edit_message_text(escape_markdown("Operação cancelada.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        await update.callback_query.edit_message_text(escape_markdown("Operação cancelada.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
     elif update.message:
         await update.message.reply_text(escape_markdown("Operação cancelada. Estou à disposição para o que precisar!", version=2), parse_mode=ParseMode.MARKDOWN_V2)
     

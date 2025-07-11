@@ -5,19 +5,17 @@ import logging
 import datetime
 import pytz
 from datetime import timedelta
-from dateutil import parser # Importado para parsing flexível de datas
+from dateutil import parser
 
-# Use um logger específico para o módulo db para melhor rastreamento
 logger = logging.getLogger(__name__)
 
-# Nome do banco de dados unificado
 DATABASE_NAME = 'lilith_bot.db' 
 
 def create_tables():
     """Cria as tabelas necessárias no banco de dados se elas não existirem."""
-    conn = None # Inicializa conn para None
+    conn = None 
     try:
-        conn = sqlite3.connect(DATABASE_NAME) # Esta linha deve criar o arquivo se ele não existir
+        conn = sqlite3.connect(DATABASE_NAME) 
         cursor = conn.cursor()
 
         # Tabela para registrar comandos do bot
@@ -128,7 +126,7 @@ def add_personal_phrase(user_id, trigger_phrase, response_phrase):
                        (user_id, trigger_phrase, response_phrase))
         conn.commit()
         return True
-    except sqlite3.IntegrityError: # Captura erro de UNIQUE constraint
+    except sqlite3.IntegrityError: 
         logger.warning(f"Frase '{trigger_phrase}' já existe para user {user_id}. Não adicionado.")
         return False
     except Exception as e:
@@ -263,6 +261,23 @@ def get_list_items(list_id):
     finally:
         conn.close()
 
+# --- NOVA FUNÇÃO ESSENCIAL PARA TOGGLE/REMOVE ---
+def get_list_item_by_id(item_id):
+    """Retorna as informações de um item da lista pelo seu ID."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    try:
+        # Seleciona list_id, item_text, is_completed
+        cursor.execute("SELECT list_id, item_text, is_completed FROM list_items WHERE id = ?", (item_id,))
+        return cursor.fetchone() # Retorna (list_id, item_text, is_completed) ou None
+    except Exception as e:
+        logger.error(f"Erro ao buscar item ID {item_id}: {e}")
+        return None
+    finally:
+        conn.close()
+# --- FIM DA NOVA FUNÇÃO ---
+
+
 def toggle_list_item(item_id, list_id):
     """Alterna o status de conclusão de um item da lista."""
     conn = sqlite3.connect(DATABASE_NAME)
@@ -296,7 +311,6 @@ def delete_list(list_id, user_id):
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
-        # A FOREIGN KEY com ON DELETE CASCADE em list_items garante que os itens sejam apagados automaticamente
         cursor.execute("DELETE FROM lists WHERE id = ? AND user_id = ?", (list_id, user_id))
         conn.commit()
         return cursor.rowcount > 0
@@ -367,8 +381,9 @@ def get_user_reminders(user_id):
         cursor.execute("SELECT id, description, scheduled_time, recurrence, active FROM reminders WHERE user_id = ? ORDER BY scheduled_time ASC", (user_id,))
         reminders = []
         for row in cursor.fetchall():
-            # Converte a string ISO de volta para objeto datetime
             scheduled_time_dt = parser.parse(row[2])
+            if scheduled_time_dt.tzinfo is None:
+                scheduled_time_dt = pytz.utc.localize(scheduled_time_dt) # Assume UTC se não tem fuso horário
             reminders.append({
                 'id': row[0],
                 'description': row[1],
@@ -400,7 +415,6 @@ def get_active_reminders(user_id=None):
         for row in cursor.fetchall():
             scheduled_time_dt = parser.parse(row[3])
             if scheduled_time_dt.tzinfo is None:
-                # Se não tem fuso horário, assume que é UTC (o que o JobQueue espera por padrão)
                 scheduled_time_dt = pytz.utc.localize(scheduled_time_dt)
             reminders.append({
                 'id': row[0],
