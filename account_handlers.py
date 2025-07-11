@@ -1,5 +1,3 @@
-# account_handlers.py
-
 import datetime
 import logging
 
@@ -86,20 +84,13 @@ async def handle_accounts_menu_selection(update: Update, context: ContextTypes.D
     await query.answer()
     action = query.data.split(':')[1]
 
-    # Aqui, você pode ter uma lógica para cada ação que não inicia um ConversationHandler,
-    # ou simplesmente retornar ao estado VIEW_ACCOUNTS_MENU se for um "voltar".
+    # Se for para voltar ao menu principal do bot (ajuda)
     if action == "main_menu":
-        # Se for para voltar ao menu principal do bot (ajuda)
-        return await accounts_menu(update, context)
-    
-    # Para outras ações que iniciam ConversationHandlers, eles são gerenciados em main.py
-    # Então, este handler apenas confirma e pode manter o usuário no estado VIEW_ACCOUNTS_MENU
-    # ou fazer uma transição de estado se necessário.
-    
-    # Por exemplo, se uma ação não inicia um novo ConversationHandler, mas precisa de uma resposta direta:
-    # if action == "some_direct_action":
-    #     await query.edit_message_text(escape_markdown("Ação direta realizada!", version=2), parse_mode=ParseMode.MARKDOWN_V2)
-    
+        # Este callback_data está ligado ao menu de ajuda, então pode ser tratado
+        # no main.py ou redirecionar aqui para o start do handlers.
+        # Por simplicidade, faremos com que volte para o menu de contas, pois ele já tem o botão de ajuda.
+        return await accounts_menu(update, context) # Retorna para o menu de contas
+
     return VIEW_ACCOUNTS_MENU # Permanece no menu de contas após a seleção
 
 # --- Adicionar Conta/Despesa ---
@@ -129,7 +120,8 @@ async def get_account_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
             await update.message.reply_text(escape_markdown("O valor deve ser um número positivo. Tente novamente.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
             return ADD_ACCOUNT_AMOUNT
         context.user_data['account_amount'] = amount
-        await update.message.reply_text(escape_markdown("Qual a data de vencimento (AAAA-MM-DD)?", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        # ALTERADO: Instrução para formato DD/MM/AAAA
+        await update.message.reply_text(escape_markdown("Qual a data de vencimento (DD/MM/AAAA)?", version=2), parse_mode=ParseMode.MARKDOWN_V2)
         return ADD_ACCOUNT_DUE_DATE
     except ValueError:
         await update.message.reply_text(escape_markdown("Valor inválido. Por favor, insira um número (ex: 1500.50).", version=2), parse_mode=ParseMode.MARKDOWN_V2)
@@ -139,9 +131,10 @@ async def get_account_due_date(update: Update, context: ContextTypes.DEFAULT_TYP
     """Recebe a data de vencimento da conta."""
     date_str = update.message.text.strip()
     try:
-        # Tenta analisar a data no formato AAAA-MM-DD
-        datetime.datetime.strptime(date_str, '%Y-%m-%d')
-        context.user_data['account_due_date'] = date_str
+        # Tenta analisar a data no formato DD/MM/AAAA
+        parsed_date = datetime.datetime.strptime(date_str, '%d/%m/%Y').date()
+        # Converte para AAAA-MM-DD para armazenamento no DB (boa prática)
+        context.user_data['account_due_date'] = parsed_date.strftime('%Y-%m-%d')
 
         keyboard = [
             [InlineKeyboardButton("Sem Recorrência", callback_data="none")],
@@ -158,7 +151,8 @@ async def get_account_due_date(update: Update, context: ContextTypes.DEFAULT_TYP
         )
         return ADD_ACCOUNT_RECURRENCE
     except ValueError:
-        await update.message.reply_text(escape_markdown("Formato de data inválido. Use AAAA-MM-DD (ex: 2025-07-25).", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        # Mensagem de erro para formato DD/MM/AAAA
+        await update.message.reply_text(escape_markdown("Formato de data inválido. Use DD/MM/AAAA (ex: 25/07/2025).", version=2), parse_mode=ParseMode.MARKDOWN_V2)
         return ADD_ACCOUNT_DUE_DATE
 
 async def get_account_recurrence(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -175,7 +169,7 @@ async def get_account_recurrence(update: Update, context: ContextTypes.DEFAULT_T
     else: # 'none' ou 'indefinite'
         name = context.user_data['account_name']
         amount = context.user_data['account_amount']
-        due_date = context.user_data['account_due_date']
+        due_date = context.user_data['account_due_date'] # Já está em AAAA-MM-DD
         user_id = query.from_user.id
 
         if accounts_db.add_monthly_account(user_id, name, amount, due_date, recurrence):
@@ -192,7 +186,8 @@ async def get_account_recurrence(update: Update, context: ContextTypes.DEFAULT_T
             logger.warning(f"Falha ao adicionar conta '{name}' para {user_id}.")
         
         context.user_data.clear()
-        return ConversationHandler.END
+        # Retorna para o menu de contas após finalizar a adição
+        return VIEW_ACCOUNTS_MENU
 
 async def get_account_parcel_count(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Recebe o número de parcelas para contas fixas."""
@@ -206,7 +201,7 @@ async def get_account_parcel_count(update: Update, context: ContextTypes.DEFAULT
 
         name = context.user_data['account_name']
         amount = context.user_data['account_amount']
-        due_date = context.user_data['account_due_date']
+        due_date = context.user_data['account_due_date'] # Já está em AAAA-MM-DD
         recurrence = context.user_data['account_recurrence']
         user_id = update.effective_user.id
 
@@ -224,7 +219,8 @@ async def get_account_parcel_count(update: Update, context: ContextTypes.DEFAULT
             logger.warning(f"Falha ao adicionar conta parcelada '{name}' para {user_id}.")
         
         context.user_data.clear()
-        return ConversationHandler.END
+        # Retorna para o menu de contas após finalizar a adição
+        return VIEW_ACCOUNTS_MENU
     except ValueError:
         await update.message.reply_text(escape_markdown("Número de parcelas inválido. Por favor, insira um número inteiro.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
         return ADD_ACCOUNT_PARCEL_COUNT
@@ -265,7 +261,8 @@ async def mark_account_paid_start(update: Update, context: ContextTypes.DEFAULT_
 
         message_text += escape_markdown(f"**ID: {acc_id}** - {name}\n  `R$ {amount:.2f} | Vencimento: {due_date_display}{recurrence_info} | Status: {status}`\n\n", version=2)
     
-    keyboard = [[InlineKeyboardButton("↩️ Voltar", callback_data="accounts_action:main_menu")]]
+    # Adicionando o botão Voltar para o menu principal de contas
+    keyboard = [[InlineKeyboardButton("↩️ Voltar ao Menu de Contas", callback_data="accounts_action:main_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
@@ -280,6 +277,12 @@ async def mark_account_paid_start(update: Update, context: ContextTypes.DEFAULT_
 async def mark_account_paid_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Confirma e marca a conta como paga."""
     user_id = update.effective_user.id
+    # Verificar se é um callback do botão "Voltar"
+    if update.callback_query and update.callback_query.data == "accounts_action:main_menu":
+        await update.callback_query.answer()
+        # Chama a função accounts_menu para retornar ao menu principal de contas
+        return await accounts_menu(update, context)
+
     try:
         account_id = int(update.message.text.strip())
     except ValueError:
@@ -300,7 +303,8 @@ async def mark_account_paid_confirm(update: Update, context: ContextTypes.DEFAUL
         logger.warning(f"Falha ao marcar conta ID {account_id} como paga para {user_id}.")
     
     context.user_data.clear()
-    return ConversationHandler.END
+    # Retorna para o menu de contas após a operação
+    return VIEW_ACCOUNTS_MENU
 
 # --- Deletar Conta ---
 
@@ -335,7 +339,8 @@ async def delete_account_start(update: Update, context: ContextTypes.DEFAULT_TYP
 
         message_text += escape_markdown(f"**ID: {acc_id}** - {name}\n  `R$ {amount:.2f} | Vencimento: {due_date_display}{recurrence_info} | Status: {status}`\n\n", version=2)
     
-    keyboard = [[InlineKeyboardButton("↩️ Voltar", callback_data="accounts_action:main_menu")]]
+    # Adicionando o botão Voltar para o menu principal de contas
+    keyboard = [[InlineKeyboardButton("↩️ Voltar ao Menu de Contas", callback_data="accounts_action:main_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
@@ -350,6 +355,11 @@ async def delete_account_start(update: Update, context: ContextTypes.DEFAULT_TYP
 async def delete_account_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Confirma e deleta a conta."""
     user_id = update.effective_user.id
+    # Verificar se é um callback do botão "Voltar"
+    if update.callback_query and update.callback_query.data == "accounts_action:main_menu":
+        await update.callback_query.answer()
+        return await accounts_menu(update, context)
+
     try:
         account_id = int(update.message.text.strip())
     except ValueError:
@@ -370,7 +380,8 @@ async def delete_account_confirm(update: Update, context: ContextTypes.DEFAULT_T
         logger.warning(f"Falha ao deletar conta ID {account_id} para {user_id}.")
     
     context.user_data.clear()
-    return ConversationHandler.END
+    # Retorna para o menu de contas após a operação
+    return VIEW_ACCOUNTS_MENU
 
 # --- Adicionar Entrada (Rendimento) ---
 
@@ -399,7 +410,7 @@ async def get_income_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             await update.message.reply_text(escape_markdown("O valor deve ser um número positivo. Tente novamente.", version=2), parse_mode=ParseMode.MARKDOWN_V2)
             return ADD_INCOME_AMOUNT
         context.user_data['income_amount'] = amount
-        await update.message.reply_text(escape_markdown("Qual a data que você recebeu (AAAA-MM-DD)?", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(escape_markdown("Qual a data que você recebeu (DD/MM/AAAA)?", version=2), parse_mode=ParseMode.MARKDOWN_V2)
         return ADD_INCOME_DATE
     except ValueError:
         await update.message.reply_text(escape_markdown("Valor inválido. Por favor, insira um número (ex: 3000.00).", version=2), parse_mode=ParseMode.MARKDOWN_V2)
@@ -409,14 +420,15 @@ async def get_income_date(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     """Recebe a data da entrada e salva."""
     date_str = update.message.text.strip()
     try:
-        datetime.datetime.strptime(date_str, '%Y-%m-%d')
-        context.user_data['income_date'] = date_str
+        parsed_date = datetime.datetime.strptime(date_str, '%d/%m/%Y').date()
+        context.user_data['income_date'] = parsed_date.strftime('%Y-%m-%d')
 
         description = context.user_data['income_description']
         amount = context.user_data['income_amount']
         user_id = update.effective_user.id
+        income_date_db = context.user_data['income_date'] # Data já no formato AAAA-MM-DD
 
-        if accounts_db.add_financial_income(user_id, description, amount, date_str):
+        if accounts_db.add_financial_income(user_id, description, amount, income_date_db):
             await update.message.reply_text(
                 escape_markdown(f"🎉 Entrada '{description}' (R$ {amount:.2f}) adicionada com sucesso!", version=2),
                 parse_mode=ParseMode.MARKDOWN_V2
@@ -430,9 +442,10 @@ async def get_income_date(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             logger.warning(f"Falha ao adicionar entrada '{description}' para {user_id}.")
         
         context.user_data.clear()
-        return ConversationHandler.END
+        # Retorna para o menu de contas após finalizar a adição
+        return VIEW_ACCOUNTS_MENU
     except ValueError:
-        await update.message.reply_text(escape_markdown("Formato de data inválido. Use AAAA-MM-DD (ex: 2025-07-01).", version=2), parse_mode=ParseMode.MARKDOWN_V2)
+        await update.message.reply_text(escape_markdown("Formato de data inválido. Use DD/MM/AAAA (ex: 01/07/2025).", version=2), parse_mode=ParseMode.MARKDOWN_V2)
         return ADD_INCOME_DATE
 
 # --- Deletar Entrada ---
@@ -460,7 +473,8 @@ async def delete_income_start(update: Update, context: ContextTypes.DEFAULT_TYPE
             income_date_display = income_date_db
         message_text += escape_markdown(f"**ID: {inc_id}** - {description}\n  `R$ {amount:.2f} | Data: {income_date_display}`\n\n", version=2)
     
-    keyboard = [[InlineKeyboardButton("↩️ Voltar", callback_data="accounts_action:main_menu")]]
+    # Adicionando o botão Voltar para o menu principal de contas
+    keyboard = [[InlineKeyboardButton("↩️ Voltar ao Menu de Contas", callback_data="accounts_action:main_menu")]]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
     if update.callback_query:
@@ -475,6 +489,11 @@ async def delete_income_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def delete_income_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Confirma e deleta a entrada."""
     user_id = update.effective_user.id
+    # Verificar se é um callback do botão "Voltar"
+    if update.callback_query and update.callback_query.data == "accounts_action:main_menu":
+        await update.callback_query.answer()
+        return await accounts_menu(update, context)
+
     try:
         income_id = int(update.message.text.strip())
     except ValueError:
@@ -495,7 +514,8 @@ async def delete_income_confirm(update: Update, context: ContextTypes.DEFAULT_TY
         logger.warning(f"Falha ao deletar entrada ID {income_id} para {user_id}.")
     
     context.user_data.clear()
-    return ConversationHandler.END
+    # Retorna para o menu de contas após a operação
+    return VIEW_ACCOUNTS_MENU
 
 # --- Visualizar Contas Detalhadas ---
 
@@ -536,7 +556,8 @@ async def view_detailed_accounts(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
     
     logger.info(f"Contas detalhadas exibidas para {user_id}.")
-    return VIEW_ACCOUNTS_MENU # Retorna ao menu de contas
+    # ALTERADO: Garante que o estado retorne para VIEW_ACCOUNTS_MENU
+    return VIEW_ACCOUNTS_MENU 
 
 # --- Visualizar Entradas Detalhadas ---
 
@@ -568,7 +589,8 @@ async def view_detailed_incomes(update: Update, context: ContextTypes.DEFAULT_TY
         await update.message.reply_text(message_text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN_V2)
     
     logger.info(f"Entradas detalhadas exibidas para {user_id}.")
-    return VIEW_ACCOUNTS_MENU # Retorna ao menu de contas
+    # ALTERADO: Garante que o estado retorne para VIEW_ACCOUNTS_MENU
+    return VIEW_ACCOUNTS_MENU 
 
 # --- Função de Cancelamento ---
 
@@ -583,4 +605,5 @@ async def cancel_accounts_flow(update: Update, context: ContextTypes.DEFAULT_TYP
     
     logger.info(f"Diálogo de contas cancelado por {update.effective_user.id}.")
     context.user_data.clear()
-    return ConversationHandler.END # Encerra o ConversationHandler atual
+    # ALTERADO: Ao cancelar, garante que volte para o menu de contas financeiras
+    return VIEW_ACCOUNTS_MENU

@@ -39,7 +39,7 @@ async def send_main_help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
         [InlineKeyboardButton("Listas", callback_data="help_category:lists")],
         [InlineKeyboardButton("Lembretes", callback_data="help_category:reminders")],
         [InlineKeyboardButton("Comandos Gerais", callback_data="help_category:general")],
-        [InlineKeyboardButton("Contas Financeiras", callback_data="help_category:accounts")]
+        
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
