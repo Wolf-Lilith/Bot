@@ -5,10 +5,10 @@ from telegram import Update
 import handlers
 import list_handlers
 import reminders_handlers
-import account_handlers
+import account_handlers # Importando o módulo de handlers de contas
 from secrets import TELEGRAM_BOT_TOKEN
 import db
-import accounts_db
+import accounts_db # Importa o módulo de banco de dados para contas
 import logging
 
 # Configuração de logging: CENTRALIZADA AQUI para todo o bot
@@ -48,7 +48,6 @@ def main():
     # --- Registra os CommandHandlers ---
     application.add_handler(CommandHandler("start", handlers.start_command))
     application.add_handler(CommandHandler("ajuda", handlers.help_command))
-    application.add_handler(CommandHandler("contas", account_handlers.accounts_menu))
 
     application.add_handler(CallbackQueryHandler(handlers.send_help_category_menu, pattern=r"^help_category:(phrases|lists|reminders|general|accounts)$"))
     application.add_handler(CallbackQueryHandler(handlers.send_main_help_menu, pattern=r"^help_category:main_menu$"))
@@ -156,7 +155,7 @@ def main():
                 CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$') # Para cancelar
             ],
         },
-        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)],
+        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)], # <--- CORREÇÃO APLICADA AQUI!
         allow_reentry=True
     )
 
@@ -183,100 +182,64 @@ def main():
         allow_reentry=True
     )
 
-    # Contas Financeiras
-    accounts_menu_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("contas", account_handlers.accounts_menu)],
+    # --- Contas Financeiras: UNIFICADO EM UM ÚNICO ConversationHandler ---
+    accounts_conv_handler = ConversationHandler(
+        entry_points=[
+            CommandHandler("contas", account_handlers.accounts_menu), # Comando para entrar no menu de contas
+        ],
         states={
             account_handlers.VIEW_ACCOUNTS_MENU: [
-                CallbackQueryHandler(account_handlers.handle_accounts_menu_selection, pattern=r"^accounts_action:main_menu$"), 
-                CallbackQueryHandler(account_handlers.add_account_start, pattern=r"^accounts_action:add_account$"),
-                CallbackQueryHandler(account_handlers.add_income_start, pattern=r"^accounts_action:add_income$"),
-                CallbackQueryHandler(account_handlers.mark_account_paid_start, pattern=r"^accounts_action:mark_paid$"),
-                CallbackQueryHandler(account_handlers.delete_account_start, pattern=r"^accounts_action:delete_account$"),
-                CallbackQueryHandler(account_handlers.delete_income_start, pattern=r"^accounts_action:delete_income$"),
-                CallbackQueryHandler(account_handlers.view_detailed_accounts, pattern=r"^accounts_action:view_accounts$"),
-                CallbackQueryHandler(account_handlers.view_detailed_incomes, pattern=r"^accounts_action:view_incomes$"),
-                CallbackQueryHandler(account_handlers.cancel_accounts_flow, pattern=r"^accounts_action:cancel$")
+                CallbackQueryHandler(account_handlers.handle_accounts_menu_selection, pattern=r"^accounts_action:"), # Padrão para os botões do menu principal de contas
+                CallbackQueryHandler(account_handlers.handle_accounts_menu_selection, pattern=r"^accounts_nav:"), # Padrão para os botões de navegação de mês no menu de resumo
+                # **LINHA ATUALIZADA PARA INCLUIR A NAVEGAÇÃO DE DELEÇÃO E VISUALIZAÇÃO**
+                CallbackQueryHandler(account_handlers.handle_view_navigation, pattern=r"^(view_accounts_nav|view_incomes_nav|delete_accounts_nav|delete_incomes_nav):"), 
             ],
-        },
-        fallbacks=[CommandHandler("cancelar", account_handlers.cancel_accounts_flow)],
-        map_to_parent={
-            ConversationHandler.END: ConversationHandler.END,
-        },
-        allow_reentry=True,
-    )
-
-    add_account_conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(account_handlers.add_account_start, pattern=r"^accounts_action:add_account$")], 
-        states={
+            
+            # --- Fluxo de Adicionar Conta ---
             account_handlers.ADD_ACCOUNT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.get_account_name)],
             account_handlers.ADD_ACCOUNT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.get_account_amount)],
-            account_handlers.ADD_ACCOUNT_DUE_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.get_account_due_date)],
+            account_handlers.GETTING_ACCOUNT_DATE_FROM_CALENDAR: [
+                CallbackQueryHandler(account_handlers.handle_calendar_callback, pattern=r"^cal:"), # Qualquer clique no calendário
+            ],
             account_handlers.ADD_ACCOUNT_RECURRENCE: [
-                CallbackQueryHandler(account_handlers.get_account_recurrence, pattern="^(none|indefinite|fixed_parcel)$"),
-                CallbackQueryHandler(account_handlers.cancel_accounts_flow, pattern="^cancel_account_add$")
+                CallbackQueryHandler(account_handlers.get_account_recurrence, pattern="^(none|indefinite|fixed_parcel|cal:cancel)$") # Inclui o cancelar do calendário
             ],
             account_handlers.ADD_ACCOUNT_PARCEL_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.get_account_parcel_count)],
-        },
-        fallbacks=[CommandHandler("cancelar", account_handlers.cancel_accounts_flow)],
-        map_to_parent={
-            ConversationHandler.END: account_handlers.VIEW_ACCOUNTS_MENU
-        },
-        allow_reentry=True
-    )
 
-    add_income_conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(account_handlers.add_income_start, pattern=r"^accounts_action:add_income$")],
-        states={
+            # --- Fluxo de Marcar Conta como Paga ---
+            account_handlers.GET_ACCOUNT_ID_TO_MARK: [
+                CallbackQueryHandler(account_handlers.mark_account_paid_confirm, pattern=r"^mark_account:\d+$"),
+                CallbackQueryHandler(account_handlers.mark_account_paid_confirm, pattern=r"^accounts_action:back_to_accounts_menu$"),
+            ],
+
+            # --- Fluxo de Deletar Conta (com navegação de mês) ---
+            account_handlers.GET_ACCOUNT_ID_TO_DELETE: [
+                CallbackQueryHandler(account_handlers.delete_account_confirm, pattern=r"^delete_account:\d+$"),
+                CallbackQueryHandler(account_handlers.delete_account_confirm, pattern=r"^accounts_action:back_to_accounts_menu$"),
+                # Adicionado para capturar a navegação de mês no fluxo de deleção de contas
+                CallbackQueryHandler(account_handlers.handle_view_navigation, pattern=r"^delete_accounts_nav:"),
+            ],
+
+            # --- Fluxo de Adicionar Entrada ---
             account_handlers.ADD_INCOME_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.get_income_description)],
             account_handlers.ADD_INCOME_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.get_income_amount)],
-            account_handlers.ADD_INCOME_DATE: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.get_income_date)],
-        },
-        fallbacks=[CommandHandler("cancelar", account_handlers.cancel_accounts_flow),
-                   CallbackQueryHandler(account_handlers.cancel_accounts_flow, pattern="^accounts_action:cancel$")],
-        map_to_parent={
-            ConversationHandler.END: account_handlers.VIEW_ACCOUNTS_MENU
-        },
-        allow_reentry=True
-    )
+            account_handlers.GETTING_INCOME_DATE_FROM_CALENDAR: [
+                CallbackQueryHandler(account_handlers.handle_calendar_callback, pattern=r"^cal:"), # Qualquer clique no calendário
+            ],
 
-    mark_account_paid_conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(account_handlers.mark_account_paid_start, pattern=r"^accounts_action:mark_paid$")],
-        states={
-            account_handlers.GET_ACCOUNT_ID_TO_MARK: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.mark_account_paid_confirm)],
+            # --- Fluxo de Deletar Entrada (com navegação de mês) ---
+            account_handlers.GET_INCOME_ID_TO_DELETE: [
+                CallbackQueryHandler(account_handlers.delete_income_confirm, pattern=r"^delete_income:\d+$"),
+                CallbackQueryHandler(account_handlers.delete_income_confirm, pattern=r"^accounts_action:back_to_accounts_menu$"),
+                # Adicionado para capturar a navegação de mês no fluxo de deleção de entradas
+                CallbackQueryHandler(account_handlers.handle_view_navigation, pattern=r"^delete_incomes_nav:"),
+            ],
         },
-        fallbacks=[CommandHandler("cancelar", account_handlers.cancel_accounts_flow),
-                   CallbackQueryHandler(account_handlers.cancel_accounts_flow, pattern="^accounts_action:cancel$")],
-        map_to_parent={
-            ConversationHandler.END: account_handlers.VIEW_ACCOUNTS_MENU
-        },
-        allow_reentry=True
-    )
-
-    delete_account_conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(account_handlers.delete_account_start, pattern=r"^accounts_action:delete_account$")],
-        states={
-            account_handlers.GET_ACCOUNT_ID_TO_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.delete_account_confirm)],
-        },
-        fallbacks=[CommandHandler("cancelar", account_handlers.cancel_accounts_flow),
-                   CallbackQueryHandler(account_handlers.cancel_accounts_flow, pattern="^accounts_action:cancel$")],
-        map_to_parent={
-            ConversationHandler.END: account_handlers.VIEW_ACCOUNTS_MENU
-        },
-        allow_reentry=True
-    )
-
-    delete_income_conv_handler = ConversationHandler(
-        entry_points=[CallbackQueryHandler(account_handlers.delete_income_start, pattern=r"^accounts_action:delete_income$")],
-        states={
-            account_handlers.GET_INCOME_ID_TO_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.delete_income_confirm)],
-        },
-        fallbacks=[CommandHandler("cancelar", account_handlers.cancel_accounts_flow),
-                   CallbackQueryHandler(account_handlers.cancel_accounts_flow, pattern="^accounts_action:cancel$")],
-        map_to_parent={
-            ConversationHandler.END: account_handlers.VIEW_ACCOUNTS_MENU
-        },
-        allow_reentry=True
+        fallbacks=[
+            CommandHandler("cancelar", account_handlers.cancel_accounts_flow), # Cancelar em qualquer ponto da conversa de contas
+            MessageHandler(filters.TEXT | filters.COMMAND, account_handlers.accounts_menu) # Volta para o menu de contas se receber texto/comando inesperado
+        ],
+        allow_reentry=True,
     )
 
     application.add_handler(add_phrase_conv_handler)
@@ -290,17 +253,8 @@ def main():
     application.add_handler(add_reminder_conv_handler)
     application.add_handler(delete_reminder_conv_handler)
 
-    # REGISTRANDO OS CONVERSATION HANDLERS DE CONTAS
-    application.add_handler(accounts_menu_conv_handler)
-    application.add_handler(add_account_conv_handler)
-    application.add_handler(add_income_conv_handler)
-    application.add_handler(delete_account_conv_handler)
-    application.add_handler(delete_income_conv_handler)
-    application.add_handler(mark_account_paid_conv_handler)
-
-    # REMOVIDO: O CallbackQueryHandler genérico que estava aqui foi removido,
-    # pois os Callbacks de seleção de lista agora são tratados DENTRO
-    # dos ConversationHandlers específicos de cada ação de lista.
+    # REGISTRANDO O ÚNICO CONVERSATION HANDLER DE CONTAS
+    application.add_handler(accounts_conv_handler)
 
     # Handler para frases personalizadas (deve ser o último MessageHandler para não interceptar comandos)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_personal_phrase))
@@ -309,7 +263,6 @@ def main():
     application.add_handler(CommandHandler("cancelar", handlers.cancel_dialog))
 
     logger.info("Bot configurado. Agendando lembretes existentes...")
-    # Passa o objeto 'application' completo, não apenas 'job_queue'
     reminders_handlers.schedule_existing_reminders(application) 
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
