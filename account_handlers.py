@@ -9,7 +9,7 @@ from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, CallbackQueryHandler, filters, CommandHandler 
 from telegram.constants import ParseMode 
 from telegram.helpers import escape_markdown 
-
+from handlers import send_main_help_menu # Adicione esta linha
 import accounts_db # Importa o módulo de banco de dados para contas
 
 logger = logging.getLogger(__name__)
@@ -181,6 +181,7 @@ async def handle_accounts_menu_selection(update: Update, context: ContextTypes.D
         if action_value == "main_menu_bot":
             await send_or_edit_message(update, "Retornando ao menu principal do bot... 👋", parse_mode=ParseMode.HTML)
             context.user_data.clear() # Limpa TUDO no user_data para um recomeço limpo
+            await send_main_help_menu(update, context)
             return ConversationHandler.END
         # Se for apenas voltar para o menu de contas, recria o menu (que enviará duas mensagens)
         return await accounts_menu(update, context) # Recria o menu de duas mensagens

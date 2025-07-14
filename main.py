@@ -1,14 +1,14 @@
 # main.py
 
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, CallbackQueryHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, CallbackQueryHandler, ContextTypes
 from telegram import Update
 import handlers
 import list_handlers
 import reminders_handlers
-import account_handlers # Importando o módulo de handlers de contas
+import account_handlers
 from secrets import TELEGRAM_BOT_TOKEN
 import db
-import accounts_db # Importa o módulo de banco de dados para contas
+import accounts_db
 import logging
 
 # Configuração de logging: CENTRALIZADA AQUI para todo o bot
@@ -49,30 +49,42 @@ def main():
     application.add_handler(CommandHandler("start", handlers.start_command))
     application.add_handler(CommandHandler("ajuda", handlers.help_command))
 
-    application.add_handler(CallbackQueryHandler(handlers.send_help_category_menu, pattern=r"^help_category:(phrases|lists|reminders|general|accounts)$"))
-    application.add_handler(CallbackQueryHandler(handlers.send_main_help_menu, pattern=r"^help_category:main_menu$"))
-
+    application.add_handler(CallbackQueryHandler(handlers.send_help_category_menu, pattern=r"^help_category:(phrases|lists|reminders|general|accounts|main_menu)$"))
+    
     # Handlers de visualização simples que não iniciam conversas
     application.add_handler(CommandHandler("minhasfrases", handlers.view_my_phrases))
-    application.add_handler(CommandHandler("listas", list_handlers.list_my_lists))
-    application.add_handler(CommandHandler("ver_lembretes", reminders_handlers.view_reminders))
+    application.add_handler(CallbackQueryHandler(handlers.view_my_phrases, pattern=r"^command:/minhasfrases$"))
+    # Handler para o botão "Sair" unificado (agora também no menu principal)
+    application.add_handler(CallbackQueryHandler(handlers.cancel_dialog, pattern=r"^cancel_dialog_action$"))
+
 
     # --- Registra os ConversationHandlers ---
 
     # Frases Personalizadas
     add_phrase_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("addfrase", handlers.new_phrase_start)],
+        entry_points=[
+            CommandHandler("addfrase", handlers.new_phrase_start),
+            CallbackQueryHandler(handlers.new_phrase_start, pattern=r"^command:/addfrase$")
+        ],
         states={
             handlers.GETTING_TRIGGER_PHRASE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.get_trigger_phrase)],
             handlers.GETTING_RESPONSE_PHRASE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.get_response_phrase)],
+            handlers.AWAIT_NEXT_PHRASE_ACTION: [CallbackQueryHandler(handlers.handle_next_phrase_action, pattern="^(add_another_phrase|help_category:main_menu|cancel_dialog_action)$")],
         },
         fallbacks=[CommandHandler("cancelar", handlers.cancel_dialog)],
         allow_reentry=True
     )
+    # ConversationHandler para Apagar Frase com seleção por botão
     delete_phrase_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("apagarfrase", handlers.delete_phrase_start)],
+        entry_points=[
+            CommandHandler("apagarfrase", handlers.delete_phrase_start),
+            CallbackQueryHandler(handlers.delete_phrase_start, pattern=r"^command:/apagarfrase$")
+        ],
         states={
-            handlers.GETTING_PHRASE_ID_TO_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.delete_phrase_confirm)],
+            handlers.AWAIT_NEXT_DELETE_ACTION: [
+                CallbackQueryHandler(handlers.delete_phrase_select_and_confirm, pattern=r"^delete_phrase_id:\d+$"),
+                CallbackQueryHandler(handlers.handle_next_delete_action, pattern="^(delete_another_phrase|help_category:main_menu|cancel_dialog_action)$"),
+            ],
         },
         fallbacks=[CommandHandler("cancelar", handlers.cancel_dialog)],
         allow_reentry=True
@@ -91,9 +103,7 @@ def main():
         entry_points=[CommandHandler("verlista", list_handlers.view_list_start)],
         states={
             list_handlers.VIEWING_LIST_COMMAND_START: [
-                # Este CallbackQueryHandler é para a seleção da lista para visualização
                 CallbackQueryHandler(list_handlers.get_list_to_view, pattern=r'^select_list_id:\d+$'),
-                # Este CallbackQueryHandler é para o botão "Voltar às Listas" dentro da visualização
                 CallbackQueryHandler(list_handlers.get_list_to_view, pattern=r'^view_lists_back$'),
                 CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$')
             ],
@@ -150,9 +160,9 @@ def main():
         entry_points=[CommandHandler("apagarlista", list_handlers.delete_list_start)],
         states={
             list_handlers.CONFIRM_DELETE_LIST: [
-                CallbackQueryHandler(list_handlers.handle_list_item_action_callbacks, pattern=r'^select_list_id:\d+$'), # Para selecionar a lista
-                CallbackQueryHandler(list_handlers.handle_list_item_action_callbacks, pattern=r'^confirm_delete_list_action:\d+$'), # Para confirmar
-                CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$') # Para cancelar
+                CallbackQueryHandler(list_handlers.handle_list_item_action_callbacks, pattern=r'^select_list_id:\d+$'),
+                CallbackQueryHandler(list_handlers.handle_list_item_action_callbacks, pattern=r'^confirm_delete_list_action:\d+$'),
+                CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$')
             ],
         },
         fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)],
@@ -167,10 +177,10 @@ def main():
             reminders_handlers.GETTING_REMINDER_DATETIME: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminders_handlers.get_reminder_datetime)],
             reminders_handlers.GETTING_REMINDER_RECURRENCE: [
                 CallbackQueryHandler(reminders_handlers.get_reminder_recurrence, pattern="^(daily|weekly|monthly|yearly|none)$"),
-                CallbackQueryHandler(reminders_handlers.cancel_dialog, pattern="^cancel_reminder_add$")
+                CallbackQueryHandler(handlers.cancel_dialog, pattern="^cancel_reminder_add$")
             ],
         },
-        fallbacks=[CommandHandler("cancelar", reminders_handlers.cancel_dialog)],
+        fallbacks=[CommandHandler("cancelar", handlers.cancel_dialog)],
         allow_reentry=True
     )
     delete_reminder_conv_handler = ConversationHandler(
@@ -178,12 +188,12 @@ def main():
         states={
             reminders_handlers.GETTING_REMINDER_ID_FOR_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminders_handlers.delete_reminder_confirm)],
         },
-        fallbacks=[CommandHandler("cancelar", reminders_handlers.cancel_dialog)],
+        fallbacks=[CommandHandler("cancelar", handlers.cancel_dialog)],
         allow_reentry=True
     )
 
     # --- Contas Financeiras: UNIFICADO EM UM ÚNICO ConversationHandler ---
-    accounts_conv_handler = account_handlers.setup_accounts_handlers() # Chama a função de setup do módulo
+    accounts_conv_handler = account_handlers.setup_accounts_handlers()
 
     application.add_handler(add_phrase_conv_handler)
     application.add_handler(delete_phrase_conv_handler)
@@ -206,7 +216,7 @@ def main():
     application.add_handler(CommandHandler("cancelar", handlers.cancel_dialog))
 
     logger.info("Bot configurado. Agendando lembretes existentes...")
-    reminders_handlers.schedule_existing_reminders(application) 
+    reminders_handlers.schedule_existing_reminders(application)
 
     application.run_polling(allowed_updates=Update.ALL_TYPES)
     logger.info("Lilith Bot parado.")
