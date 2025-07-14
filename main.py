@@ -155,7 +155,7 @@ def main():
                 CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$') # Para cancelar
             ],
         },
-        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)], # <--- CORREÇÃO APLICADA AQUI!
+        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)],
         allow_reentry=True
     )
 
@@ -183,64 +183,7 @@ def main():
     )
 
     # --- Contas Financeiras: UNIFICADO EM UM ÚNICO ConversationHandler ---
-    accounts_conv_handler = ConversationHandler(
-        entry_points=[
-            CommandHandler("contas", account_handlers.accounts_menu), # Comando para entrar no menu de contas
-        ],
-        states={
-            account_handlers.VIEW_ACCOUNTS_MENU: [
-                CallbackQueryHandler(account_handlers.handle_accounts_menu_selection, pattern=r"^accounts_action:"), # Padrão para os botões do menu principal de contas
-                CallbackQueryHandler(account_handlers.handle_accounts_menu_selection, pattern=r"^accounts_nav:"), # Padrão para os botões de navegação de mês no menu de resumo
-                # **LINHA ATUALIZADA PARA INCLUIR A NAVEGAÇÃO DE DELEÇÃO E VISUALIZAÇÃO**
-                CallbackQueryHandler(account_handlers.handle_view_navigation, pattern=r"^(view_accounts_nav|view_incomes_nav|delete_accounts_nav|delete_incomes_nav):"), 
-            ],
-            
-            # --- Fluxo de Adicionar Conta ---
-            account_handlers.ADD_ACCOUNT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.get_account_name)],
-            account_handlers.ADD_ACCOUNT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.get_account_amount)],
-            account_handlers.GETTING_ACCOUNT_DATE_FROM_CALENDAR: [
-                CallbackQueryHandler(account_handlers.handle_calendar_callback, pattern=r"^cal:"), # Qualquer clique no calendário
-            ],
-            account_handlers.ADD_ACCOUNT_RECURRENCE: [
-                CallbackQueryHandler(account_handlers.get_account_recurrence, pattern="^(none|indefinite|fixed_parcel|cal:cancel)$") # Inclui o cancelar do calendário
-            ],
-            account_handlers.ADD_ACCOUNT_PARCEL_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.get_account_parcel_count)],
-
-            # --- Fluxo de Marcar Conta como Paga ---
-            account_handlers.GET_ACCOUNT_ID_TO_MARK: [
-                CallbackQueryHandler(account_handlers.mark_account_paid_confirm, pattern=r"^mark_account:\d+$"),
-                CallbackQueryHandler(account_handlers.mark_account_paid_confirm, pattern=r"^accounts_action:back_to_accounts_menu$"),
-            ],
-
-            # --- Fluxo de Deletar Conta (com navegação de mês) ---
-            account_handlers.GET_ACCOUNT_ID_TO_DELETE: [
-                CallbackQueryHandler(account_handlers.delete_account_confirm, pattern=r"^delete_account:\d+$"),
-                CallbackQueryHandler(account_handlers.delete_account_confirm, pattern=r"^accounts_action:back_to_accounts_menu$"),
-                # Adicionado para capturar a navegação de mês no fluxo de deleção de contas
-                CallbackQueryHandler(account_handlers.handle_view_navigation, pattern=r"^delete_accounts_nav:"),
-            ],
-
-            # --- Fluxo de Adicionar Entrada ---
-            account_handlers.ADD_INCOME_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.get_income_description)],
-            account_handlers.ADD_INCOME_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, account_handlers.get_income_amount)],
-            account_handlers.GETTING_INCOME_DATE_FROM_CALENDAR: [
-                CallbackQueryHandler(account_handlers.handle_calendar_callback, pattern=r"^cal:"), # Qualquer clique no calendário
-            ],
-
-            # --- Fluxo de Deletar Entrada (com navegação de mês) ---
-            account_handlers.GET_INCOME_ID_TO_DELETE: [
-                CallbackQueryHandler(account_handlers.delete_income_confirm, pattern=r"^delete_income:\d+$"),
-                CallbackQueryHandler(account_handlers.delete_income_confirm, pattern=r"^accounts_action:back_to_accounts_menu$"),
-                # Adicionado para capturar a navegação de mês no fluxo de deleção de entradas
-                CallbackQueryHandler(account_handlers.handle_view_navigation, pattern=r"^delete_incomes_nav:"),
-            ],
-        },
-        fallbacks=[
-            CommandHandler("cancelar", account_handlers.cancel_accounts_flow), # Cancelar em qualquer ponto da conversa de contas
-            MessageHandler(filters.TEXT | filters.COMMAND, account_handlers.accounts_menu) # Volta para o menu de contas se receber texto/comando inesperado
-        ],
-        allow_reentry=True,
-    )
+    accounts_conv_handler = account_handlers.setup_accounts_handlers() # Chama a função de setup do módulo
 
     application.add_handler(add_phrase_conv_handler)
     application.add_handler(delete_phrase_conv_handler)

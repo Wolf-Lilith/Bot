@@ -48,11 +48,27 @@ def init_accounts_db():
                 current_parcel INTEGER DEFAULT NULL, -- Parcela atual para esta instância (se for fixed_parcel)
                 total_parcels INTEGER DEFAULT NULL, -- Total de parcelas (para exibir)
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, name, month, year, template_id) ON CONFLICT REPLACE,
+                UNIQUE(user_id, name, month, year, template_id), 
                 FOREIGN KEY (template_id) REFERENCES account_templates(id)
             )
         ''')
         logger.debug("Tabela 'monthly_account_instances' criada ou já existente.")
+
+        # Tabela para registrar instâncias de contas recorrentes que foram removidas para um mês específico
+        logger.debug("Tentando criar tabela 'ignored_monthly_instances'...")
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS ignored_monthly_instances (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                template_id INTEGER NOT NULL, -- FK para account_templates
+                month INTEGER NOT NULL,
+                year INTEGER NOT NULL,
+                created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(user_id, template_id, month, year),
+                FOREIGN KEY (template_id) REFERENCES account_templates(id)
+            )
+        ''')
+        logger.debug("Tabela 'ignored_monthly_instances' criada ou já existente.")
 
         # Tabela para rendimentos financeiros
         logger.debug("Tentando criar tabela 'financial_incomes'...")
@@ -64,7 +80,7 @@ def init_accounts_db():
                 amount REAL NOT NULL,
                 income_date TEXT NOT NULL, -- YYYY-MM-DD
                 created_at TEXT DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(user_id, description, income_date) ON CONFLICT REPLACE
+                UNIQUE(user_id, description, income_date) 
             )
         ''')
         logger.debug("Tabela 'financial_incomes' criada ou já existente.")
@@ -77,6 +93,82 @@ def init_accounts_db():
         if conn:
             conn.close()
             logger.debug("Conexão com o banco de dados fechada após init.")
+
+# NOVO: Função para adicionar uma entrada na tabela de instâncias ignoradas
+def _add_ignored_monthly_instance(user_id: int, template_id: int, month: int, year: int):
+    """Registra uma instância de conta recorrente como ignorada para um mês específico."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    try:
+        logger.debug(f"Adicionando instância ignorada: user_id={user_id}, template_id={template_id}, month={month}, year={year}")
+        cursor.execute(
+            """
+            INSERT INTO ignored_monthly_instances (user_id, template_id, month, year)
+            VALUES (?, ?, ?, ?)
+            """,
+            (user_id, template_id, month, year)
+        )
+        conn.commit()
+        logger.info(f"Instância para template {template_id} em {month}/{year} marcada como ignorada para user {user_id}.")
+        return True
+    except sqlite3.IntegrityError:
+        logger.warning(f"Instância para template {template_id} em {month}/{year} já estava marcada como ignorada para user {user_id}.")
+        return False
+    except Exception as e:
+        logger.error(f"Erro ao adicionar instância ignorada para template {template_id} em {month}/{year} (user {user_id}): {e}")
+        return False
+    finally:
+        conn.close()
+        logger.debug("Conexão com o banco de dados fechada após _add_ignored_monthly_instance.")
+
+# NOVO: Função para remover uma entrada da tabela de instâncias ignoradas (se for o caso de reativar no futuro)
+def _remove_ignored_monthly_instance(user_id: int, template_id: int, month: int, year: int):
+    """Remove o registro de uma instância ignorada para um mês específico."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    try:
+        logger.debug(f"Removendo instância ignorada: user_id={user_id}, template_id={template_id}, month={month}, year={year}")
+        cursor.execute(
+            """
+            DELETE FROM ignored_monthly_instances
+            WHERE user_id = ? AND template_id = ? AND month = ? AND year = ?
+            """,
+            (user_id, template_id, month, year)
+        )
+        conn.commit()
+        if cursor.rowcount > 0:
+            logger.info(f"Instância para template {template_id} em {month}/{year} removida da lista de ignoradas para user {user_id}.")
+            return True
+        else:
+            logger.warning(f"Instância para template {template_id} em {month}/{year} não encontrada na lista de ignoradas para user {user_id}.")
+            return False
+    except Exception as e:
+        logger.error(f"Erro ao remover instância ignorada para template {template_id} em {month}/{year} (user {user_id}): {e}")
+        return False
+    finally:
+        conn.close()
+        logger.debug("Conexão com o banco de dados fechada após _remove_ignored_monthly_instance.")
+
+# NOVO: Função para verificar se uma instância de template deve ser ignorada para um mês
+def _is_monthly_instance_ignored(user_id: int, template_id: int, month: int, year: int) -> bool:
+    """Verifica se uma instância de conta recorrente foi marcada para ser ignorada para um mês específico."""
+    conn = sqlite3.connect(DATABASE_NAME)
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            """
+            SELECT 1 FROM ignored_monthly_instances
+            WHERE user_id = ? AND template_id = ? AND month = ? AND year = ?
+            """,
+            (user_id, template_id, month, year)
+        )
+        return cursor.fetchone() is not None
+    except Exception as e:
+        logger.error(f"Erro ao verificar se instância é ignorada para template {template_id} em {month}/{year} (user {user_id}): {e}")
+        return False
+    finally:
+        conn.close()
+
 
 def _add_account_template(user_id, name, amount, due_date_base, recurrence='none', parcel_count=None):
     """Adiciona um NOVO MODELO de conta (template)."""
@@ -128,6 +220,9 @@ def _add_monthly_account_instance(user_id, name, amount, due_date, month, year, 
         conn.commit()
         logger.info(f"Instância de conta '{name}' para {month}/{year} adicionada com sucesso para user {user_id}.")
         return True
+    except sqlite3.IntegrityError: # Tratamento específico para IntegrityError
+        logger.warning(f"Instância de conta '{name}' para {month}/{year} já existe para user {user_id}. Não inserindo novamente.")
+        return False
     except Exception as e:
         logger.error(f"Erro ao adicionar instância mensal de conta para '{name}' em {month}/{year} (user {user_id}): {e}")
         return False
@@ -135,7 +230,9 @@ def _add_monthly_account_instance(user_id, name, amount, due_date, month, year, 
         conn.close()
         logger.debug("Conexão com o banco de dados fechada após _add_monthly_account_instance.")
 
-def add_monthly_account(user_id, name, amount, due_date, recurrence='none', parcel_count=None, current_parcel_template=1):
+# CORREÇÃO NA DEFINIÇÃO DA FUNÇÃO: O 'current_parcel_template=1' é um detalhe interno para o _add_monthly_account_instance,
+# não para a função pública add_monthly_account.
+def add_monthly_account(user_id, name, amount, due_date, recurrence='none', parcel_count=None):
     """
     Adiciona uma nova conta.
     Se for recorrente ou parcelada, adiciona um template e gera a primeira instância.
@@ -159,12 +256,14 @@ def add_monthly_account(user_id, name, amount, due_date, recurrence='none', parc
             return False
         
         # Gera a instância para o mês/ano da due_date_base
-        # Se for parcelada, current_parcel_template é a primeira parcela
+        # Se for parcelada, current_parcel é 1 para a primeira instância criada aqui.
+        current_parcel_val = 1 if recurrence == 'fixed_parcel' else None
+        total_parcels_val = parcel_count if recurrence == 'fixed_parcel' else None
+
         logger.debug(f"Template ID {template_id} obtido. Gerando primeira instância.")
         return _add_monthly_account_instance(user_id, name, amount, due_date, month, year, 
                                              is_paid=0, recurrence_type=recurrence, template_id=template_id, 
-                                             current_parcel=current_parcel_template if recurrence == 'fixed_parcel' else None,
-                                             total_parcels=parcel_count if recurrence == 'fixed_parcel' else None)
+                                             current_parcel=current_parcel_val, total_parcels=total_parcels_val)
 
 def _generate_monthly_account_instances(user_id: int, month: int, year: int):
     """
@@ -211,6 +310,10 @@ def _generate_monthly_account_instances(user_id: int, month: int, year: int):
             instance_due_date_str = instance_due_date_dt.strftime('%Y-%m-%d')
             logger.debug(f"Data da instância calculada para {month}/{year}: {instance_due_date_str}.")
 
+            # NOVO: Verifica se esta instância deve ser ignorada para este mês
+            if _is_monthly_instance_ignored(user_id, t_id, month, year):
+                logger.debug(f"Instância para template '{t_name}' ({t_id}) em {month}/{year} está marcada como IGNORADA. Pulando criação.")
+                continue
 
             # Verifica se a instância já existe para este mês/ano
             cursor.execute(
@@ -295,7 +398,6 @@ def get_account_by_id(account_id, user_id):
     cursor = conn.cursor()
     try:
         logger.debug(f"Buscando conta por ID: {account_id} para user {user_id}.")
-        # Adicionei template_id aqui para que o handler saiba se é recorrente
         cursor.execute(
             """
             SELECT id, name, amount, due_date, is_paid, recurrence_type, current_parcel, total_parcels, template_id
@@ -343,19 +445,38 @@ def mark_account_paid(account_id, user_id):
 def delete_monthly_account(account_id, user_id):
     """
     Deleta uma ÚNICA INSTÂNCIA de conta mensal.
-    NÃO deve deletar o template pai ou instâncias futuras.
+    Se a instância deletada for de um template recorrente, ela também é marcada como ignorada para aquele mês.
     """
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
     try:
         logger.debug(f"Tentando deletar instância de conta ID {account_id} para user {user_id}.")
+        
+        # Passo 1: Obter detalhes da instância antes de deletar
+        cursor.execute(
+            "SELECT template_id, month, year FROM monthly_account_instances WHERE id = ? AND user_id = ?",
+            (account_id, user_id)
+        )
+        instance_details = cursor.fetchone()
+        
+        # Passo 2: Deletar a instância
         cursor.execute(
             "DELETE FROM monthly_account_instances WHERE id = ? AND user_id = ?",
             (account_id, user_id)
         )
         conn.commit()
+
         if cursor.rowcount > 0:
             logger.info(f"Instância de conta ID {account_id} deletada com sucesso para user {user_id}.")
+            
+            # Passo 3: Se era de um template recorrente, adicionar à lista de ignorados
+            if instance_details and instance_details[0] is not None: # instance_details[0] é o template_id
+                template_id = instance_details[0]
+                month = instance_details[1]
+                year = instance_details[2]
+                _add_ignored_monthly_instance(user_id, template_id, month, year) # Adiciona à tabela de ignorados
+                logger.info(f"Instância de conta ID {account_id} (template {template_id}) para {month}/{year} marcada como ignorada.")
+            
             return True
         else:
             logger.warning(f"Falha ao deletar instância de conta ID {account_id} para user {user_id}. Nenhuma linha afetada.")
@@ -371,6 +492,7 @@ def delete_account_template_and_future_instances(template_id, user_id):
     """
     Deleta o template de conta recorrente e TODAS as instâncias associadas
     (incluindo a instância do mês atual e futuras).
+    Também limpa entradas correspondentes na tabela de ignorados.
     """
     conn = sqlite3.connect(DATABASE_NAME)
     cursor = conn.cursor()
@@ -384,6 +506,14 @@ def delete_account_template_and_future_instances(template_id, user_id):
         )
         rows_deleted_instances = cursor.rowcount
         logger.info(f"{rows_deleted_instances} instâncias deletadas para o template ID {template_id}.")
+
+        # NOVO: Limpa as entradas correspondentes na tabela de instâncias ignoradas
+        cursor.execute(
+            "DELETE FROM ignored_monthly_instances WHERE template_id = ? AND user_id = ?",
+            (template_id, user_id)
+        )
+        rows_deleted_ignored = cursor.rowcount
+        logger.info(f"{rows_deleted_ignored} entradas de ignorados deletadas para o template ID {template_id}.")
 
         # Deleta o template em si
         cursor.execute(
@@ -415,6 +545,9 @@ def add_financial_income(user_id, description, amount, income_date):
         conn.commit()
         logger.info(f"Entrada '{description}' adicionada com sucesso para user {user_id}.")
         return True
+    except sqlite3.IntegrityError: # Tratamento específico para IntegrityError
+        logger.warning(f"Entrada '{description}' para a data {income_date} já existe para user {user_id}. Não inserindo novamente.")
+        return False
     except Exception as e:
         logger.error(f"Erro ao adicionar rendimento financeiro para '{description}' (user {user_id}): {e}")
         return False
@@ -499,7 +632,7 @@ def get_accumulated_balance_up_to_date(user_id: int, target_date: datetime.date)
     cuja data de vencimento é até a data.
     """
     conn = None
-    balance = 0.0
+    balance = 0.0 # Inicializa balance antes do try
     try:
         conn = sqlite3.connect(DATABASE_NAME)
         cursor = conn.cursor()
@@ -507,16 +640,14 @@ def get_accumulated_balance_up_to_date(user_id: int, target_date: datetime.date)
         logger.debug(f"Calculando saldo acumulado para user {user_id} até {target_date_str}.")
 
         # Total de entradas até a data alvo
-        logger.debug(f"Buscando total de entradas até {target_date_str} para user {user_id}.")
         cursor.execute(
             "SELECT SUM(amount) FROM financial_incomes WHERE user_id = ? AND income_date <= ?",
             (user_id, target_date_str)
         )
-        total_incomes = cursor.fetchone()[0] or 0.0
-        logger.debug(f"Total de entradas até {target_date_str}: {total_incomes:.2f}.")
+        total_incomes = cursor.fetchone()[0] or 0.0 # Atribuição
+        logger.debug(f"Buscando total de entradas até {target_date_str}: {total_incomes}.") # LOG AGORA VEM DEPOIS DA ATRIBUIÇÃO
 
         # Total de contas (despesas) INSTÂNCIAS até a data alvo
-        logger.debug(f"Buscando total de contas (instâncias) até {target_date_str} para user {user_id}.")
         cursor.execute(
             """
             SELECT SUM(amount) FROM monthly_account_instances
@@ -524,8 +655,8 @@ def get_accumulated_balance_up_to_date(user_id: int, target_date: datetime.date)
             """,
             (user_id, target_date_str)
         )
-        total_expenses = cursor.fetchone()[0] or 0.0
-        logger.debug(f"Total de contas (instâncias) até {target_date_str}: {total_expenses:.2f}.")
+        total_expenses = cursor.fetchone()[0] or 0.0 # Atribuição
+        logger.debug(f"Buscando total de contas (instâncias) até {target_date_str}: {total_expenses}.") # LOG AGORA VEM DEPOIS DA ATRIBUIÇÃO
         
         balance = total_incomes - total_expenses
         logger.info(f"Saldo acumulado para user {user_id} até {target_date_str}: {balance:.2f}.")
@@ -542,7 +673,7 @@ def get_financial_summary(user_id: int, month: int, year: int) -> dict:
     """
     Retorna um dicionário com o resumo financeiro para o mês e ano especificados,
     considerando o saldo acumulado do mês anterior.
-    AGORA OPERA APENAS NAS INSTÂNCIAS GERADAS.
+    AGORA OPERA APENAS NAS INSTÂNCIAS GENERADAS.
     """
     logger.debug(f"Gerando resumo financeiro para user {user_id}, mês {month}/{year}.")
     # Garante que as instâncias para o mês solicitado foram geradas
