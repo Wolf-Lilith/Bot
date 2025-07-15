@@ -220,7 +220,7 @@ async def new_phrase_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     logger.info(f"Comando /addfrase recebido de {user_id}.")
 
     if update.effective_message:
-        await update.effective_message.reply_html("Qual frase ou palavra deve <b>ativar</b> a minha resposta?", parse_mode=ParseMode.HTML) 
+        await update.effective_message.reply_html("Qual frase ou palavra deve <b>ativar</b> a minha resposta?") 
 
     return GETTING_TRIGGER_PHRASE
 
@@ -234,7 +234,7 @@ async def get_trigger_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     context.user_data['trigger_phrase'] = trigger_phrase
     logger.info(f"Gatilho '{trigger_phrase}' recebido de {user_id}.")
-    await update.message.reply_text(f"Entendi! E qual deve ser a minha <b>resposta</b> para '<code>{html.escape(trigger_phrase)}</code>'?", parse_mode=ParseMode.HTML) 
+    await update.message.reply_html(f"Entendi! E qual deve ser a minha <b>resposta</b> para '<code>{html.escape(trigger_phrase)}</code>'?") 
     return GETTING_RESPONSE_PHRASE
 
 async def get_response_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -253,7 +253,7 @@ async def get_response_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE
             f"Quando você disser: '<code>{html.escape(trigger_phrase)}</code>'\n" # Alterado de <br> para \n
             f"Eu responderei: '<code>{html.escape(response_phrase)}</code>'"
         )
-        await update.message.reply_text(confirmation_message, parse_mode=ParseMode.HTML) 
+        await update.message.reply_html(confirmation_message) 
         logger.info(f"Frase personalizada adicionada por {user_id}: '{trigger_phrase}' -> '{response_phrase}'.")
 
         keyboard = [
@@ -306,19 +306,19 @@ async def view_my_phrases(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
         if update.effective_message:
             try:
-                await update.effective_message.reply_text(message_text, parse_mode=ParseMode.HTML) 
+                await update.effective_message.reply_html(message_text) 
             except Exception as e:
                 logger.warning(f"Erro ao enviar/editar mensagem de frases (view_my_phrases): {e}. Tentando enviar nova mensagem.")
-                await update.effective_message.reply_text(message_text, parse_mode=ParseMode.HTML) 
+                await update.effective_message.reply_html(message_text) 
         logger.info(f"Frases personalizadas exibidas para {user_id}.")
     else:
         no_phrases_text = "Você ainda não adicionou nenhuma frase personalizada. Use /addfrase para adicionar uma!"
         if update.effective_message:
             try:
-                await update.effective_message.reply_text(no_phrases_text, parse_mode=ParseMode.HTML) 
+                await update.effective_message.reply_html(no_phrases_text) 
             except Exception as e:
                 logger.warning(f"Erro ao enviar/editar mensagem de frases vazias (view_my_phrases): {e}. Tentando enviar nova mensagem.")
-                await update.effective_message.reply_text(no_phrases_text, parse_mode=ParseMode.HTML) 
+                await update.effective_message.reply_html(no_phrases_text) 
         logger.info(f"Nenhuma frase personalizada encontrada para {user_id}.")
 
     keyboard = [
@@ -345,7 +345,7 @@ async def delete_phrase_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     if not phrases:
         no_phrases_text = "Você não tem nenhuma frase personalizada para apagar."
         if update.effective_message:
-            await update.effective_message.reply_text(no_phrases_text, parse_mode=ParseMode.HTML) 
+            await update.effective_message.reply_html(no_phrases_text) 
         return ConversationHandler.END
 
     message_text = "📚 Suas frases personalizadas:\n\n" \
@@ -378,10 +378,9 @@ async def delete_phrase_start(update: Update, context: ContextTypes.DEFAULT_TYPE
                 parse_mode=ParseMode.HTML 
             )
     elif update.message:
-        await update.message.reply_text(
+        await update.message.reply_html(
             text=message_text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.HTML 
+            reply_markup=reply_markup
         )
 
     return AWAIT_NEXT_DELETE_ACTION
@@ -443,7 +442,7 @@ async def handle_personal_phrase(update: Update, context: ContextTypes.DEFAULT_T
 
         response_phrase = db.get_response_for_trigger(user_id, text)
         if response_phrase:
-            await update.message.reply_text(html.escape(response_phrase), parse_mode=ParseMode.HTML) 
+            await update.message.reply_html(html.escape(response_phrase)) 
             logger.info(f"Frase personalizada acionada por {user_id}: '{text}' -> '{response_phrase}'.")
             return
 
