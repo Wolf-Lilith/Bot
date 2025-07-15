@@ -1,10 +1,11 @@
 import html
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.ext import ContextTypes, ConversationHandler
-from telegram.constants import ParseMode
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup 
+from telegram.ext import ContextTypes, ConversationHandler 
+from telegram.constants import ParseMode # ESTA É A LINHA CRÍTICA PARA CORREÇÃO
 import logging
 import db
 import re
+import list_handlers 
 
 # Usar o logger configurado em main.py
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ async def send_main_help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
         [InlineKeyboardButton("Lembretes", callback_data="help_category:reminders")],
         [InlineKeyboardButton("Comandos Gerais", callback_data="help_category:general")],
         [InlineKeyboardButton("💰 Contas Financeiras", callback_data="accounts_action:open_menu")],
-        [InlineKeyboardButton("❌ Sair", callback_data="cancel_dialog_action")] # NOVO: Botão Sair no menu principal
+        [InlineKeyboardButton("❌ Sair", callback_data="cancel_dialog_action")]
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -50,12 +51,23 @@ async def send_main_help_menu(update: Update, context: ContextTypes.DEFAULT_TYPE
     if update.callback_query:
         query = update.callback_query
         await query.answer()
-        await query.edit_message_text(
-            text=help_message_text,
-            reply_markup=reply_markup,
-            parse_mode=ParseMode.HTML
-        )
-        logger.info(f"Menu de ajuda editado via callback para {query.from_user.id}.")
+        try:
+            await query.edit_message_text(
+                text=help_message_text,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML
+            )
+        except telegram.error.BadRequest as e:
+            if "Message is not modified" in str(e):
+                logger.info(f"Tentativa de editar mensagem de ajuda com conteúdo idêntico para {query.from_user.id}. Enviando nova mensagem.")
+                await query.message.reply_text(
+                    text=help_message_text,
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.HTML
+                )
+            else:
+                raise e
+        logger.info(f"Menu de ajuda editado/enviado via callback para {query.from_user.id}.")
     elif update.message:
         await update.message.reply_text(
             text=help_message_text,
@@ -73,7 +85,7 @@ async def send_help_category_menu(update: Update, context: ContextTypes.DEFAULT_
     category = query.data.split(':')[1]
 
     category_message = ""
-    category_keyboard = [] 
+    category_keyboard = []
 
     if category == "phrases":
         category_message = (
@@ -87,77 +99,111 @@ async def send_help_category_menu(update: Update, context: ContextTypes.DEFAULT_
             [InlineKeyboardButton("🗑️ Apagar Frase", callback_data="command:/apagarfrase")],
         ]
     elif category == "lists":
-        category_message = (
-            "📝 <b>Listas:</b>\n"
-            "<b> • </b> <code>/novalista</code> - Cria uma nova lista (ex: compras, tarefas).\n"
-            "<b> • </b> <code>/listas</code> - Vê todas as suas listas.\n"
-            "<b> • </b> <code>/verlista</code> - Vê os itens de uma lista específica.\n"
-            "<b> • </b> <code>/additem</code> - Adiciona um item a uma lista existente.\n"
-            "<b> • </b> <code>/marcaritem</code> - Marca um item da lista como completo ou incompleto.\n"
-            "<b> • </b> <code>/removeritem</code> - Remove um item de uma lista.\n"
-            "<b> • </b> <code>/apagarlista</code> - Apaga uma lista inteira.\n\n"
-            "Organize suas tarefas e compras facilmente!"
-        )
+        await list_handlers.list_my_lists_menu(update, context)
+        logger.info(f"Menu de ajuda da categoria 'lists' direcionado para list_handlers.list_my_lists_menu para {query.from_user.id}.")
+        return
     elif category == "reminders":
         category_message = (
             "⏰ <b>Lembretes:</b>\n"
-            "<b> • </b> <code>/add_lembrete</code> - Adiciona um novo lembrete com data e hora.\n"
-            "<b> • </b> <code>/ver_lembretes</code> - Vê todos os seus lembretes programados.\n"
-            "<b> • </b> <code>/apagar_lembrete</code> - Apaga um lembrete existente.\n\n"
-            "Nunca mais esqueça de nada importante!"
+            "Nunca mais esqueça de nada importante! Selecione uma ação:"
         )
+        category_keyboard = [
+            [InlineKeyboardButton("➕ Adicionar Lembrete", callback_data="command:/add_lembrete")],
+            [InlineKeyboardButton("👀 Ver Meus Lembretes", callback_data="command:/ver_lembretes")],
+            [InlineKeyboardButton("🗑️ Apagar Lembrete", callback_data="command:/apagar_lembrete")],
+        ]
     elif category == "general":
         category_message = (
             "✨ <b>Comandos Gerais:</b>\n"
-            "<b> • </b> <code>/start</code> - Inicia uma conversa comigo e te cumprimenta.\n"
-            "<b> • </b> <code>/ajuda</code> - Mostra este menu de ajuda.\n"
-            "<b> • </b> <code>/cancelar</code> - Cancela qualquer operação em andamento.\n\n"
-            "Estou sempre aprendendo e disponível para te ajudar!"
+            "Estou sempre aprendendo e disponível para te ajudar! Selecione uma ação:"
         )
+        category_keyboard = [
+            [InlineKeyboardButton("👋 Iniciar Conversa", callback_data="show_command:/start")],
+            [InlineKeyboardButton("❓ Menu de Ajuda", callback_data="show_command:/ajuda")],
+            [InlineKeyboardButton("❌ Cancelar Operação", callback_data="cancel_dialog_action")],
+        ]
     elif category == "accounts":
         category_message = (
             "💰 <b>Contas Financeiras:</b>\n"
-            "<b> • </b> <code>/contas</code> - Abre o menu de gerenciamento de contas.<br>"
-            "  <b> • </b> Adicionar conta/despesa\n"
-            "  <b> • </b> Adicionar entrada (salário, renda extra)\n"
-            "  <b> • </b> Marcar conta como paga\n"
-            "  <b> • </b> Ver saldo e contas\n"
-            "  <b> • </b> Deletar contas/entradas\n\n"
-            "Mantenha suas finanças organizadas!"
+            "Mantenha suas finanças organizadas! Selecione uma ação:"
         )
+        category_keyboard = [
+            [InlineKeyboardButton("Abrir Menu de Contas", callback_data="accounts_action:open_menu")],
+        ]
     elif category == "main_menu":
         await send_main_help_menu(update, context)
         return
-    else:
-        category_message = "Categoria de ajuda desconhecida."
 
-    category_keyboard.append([InlineKeyboardButton("⬅️ Voltar ao Menu Principal", callback_data="help_category:main_menu")])
+    if category != "main_menu":
+        category_keyboard.append([InlineKeyboardButton("⬅️ Voltar ao Menu Principal", callback_data="help_category:main_menu")])
     reply_markup = InlineKeyboardMarkup(category_keyboard)
 
+    try:
+        await query.edit_message_text(
+            text=category_message,
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML
+        )
+    except telegram.error.BadRequest as e:
+        if "Message is not modified" in str(e):
+            logger.info(f"Tentativa de editar mensagem com conteúdo idêntico para categoria '{category}'. Enviando nova mensagem.")
+            await query.message.reply_text(
+                text=category_message,
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML
+            )
+        else:
+            raise e
+
+    logger.info(f"Menu de ajuda da categoria '{category}' enviado para {query.from_user.id}.")
+
+async def show_command_and_return_to_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Mostra o comando associado ao botão e volta ao menu principal."""
+    query = update.callback_query
+    await query.answer()
+
+    command_to_show = query.data.split(':')[1]
+
+    # Edita a mensagem para mostrar o comando
     await query.edit_message_text(
-        text=category_message,
+        f"O Comando para essa ação é <code>{html.escape(command_to_show)}</code>. Obrigado por perguntar!",
+        parse_mode=ParseMode.HTML
+    )
+
+    # Em seguida, envia o menu principal logo abaixo
+    keyboard = [
+        [InlineKeyboardButton("Frases Personalizadas", callback_data="help_category:phrases")],
+        [InlineKeyboardButton("Listas", callback_data="help_category:lists")],
+        [InlineKeyboardButton("Lembretes", callback_data="help_category:reminders")],
+        [InlineKeyboardButton("Comandos Gerais", callback_data="help_category:general")],
+        [InlineKeyboardButton("💰 Contas Financeiras", callback_data="accounts_action:open_menu")],
+        [InlineKeyboardButton("❌ Sair", callback_data="cancel_dialog_action")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await query.message.reply_text(
+        "Selecione uma categoria de ajuda para ver os comandos:",
         reply_markup=reply_markup,
         parse_mode=ParseMode.HTML
     )
-    logger.info(f"Menu de ajuda da categoria '{category}' enviado para {query.from_user.id}.")
 
-
-# --- Funções para Frases Personalizadas ---
+    logger.info(f"Usuário {query.from_user.id} solicitou e visualizou o comando '{command_to_show}' e retornou ao menu principal.")
+    return ConversationHandler.END
 
 async def new_phrase_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Inicia o diálogo para adicionar uma nova frase."""
     user_id = update.effective_user.id
     logger.info(f"Comando /addfrase recebido de {user_id}.")
-    
+
     if update.effective_message:
         await update.effective_message.reply_text("Qual frase ou palavra deve <b>ativar</b> a minha resposta?", parse_mode=ParseMode.HTML)
-    
+
     return GETTING_TRIGGER_PHRASE
 
 async def get_trigger_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Recebe a frase de gatilho e pede a frase de resposta."""
     user_id = update.effective_user.id
-    trigger_phrase = update.message.text.strip() 
+    trigger_phrase = update.message.text.strip()
     if not trigger_phrase:
         await update.message.reply_text("A frase de gatilho não pode ser vazia. Tente novamente.", parse_mode=ParseMode.HTML)
         return GETTING_TRIGGER_PHRASE
@@ -170,7 +216,7 @@ async def get_trigger_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE)
 async def get_response_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Recebe a frase de resposta e salva a frase personalizada."""
     user_id = update.effective_user.id
-    response_phrase = update.message.text.strip() 
+    response_phrase = update.message.text.strip()
     trigger_phrase = context.user_data.get('trigger_phrase')
 
     if not response_phrase:
@@ -187,15 +233,15 @@ async def get_response_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE
         logger.info(f"Frase personalizada adicionada por {user_id}: '{trigger_phrase}' -> '{response_phrase}'.")
 
         keyboard = [
-            [InlineKeyboardButton("➕ Adicionar Outra Frase", callback_data="add_another_phrase")], 
-            [InlineKeyboardButton("🏠 Voltar ao Menu Principal", callback_data="help_category:main_menu")], 
-            [InlineKeyboardButton("❌ Sair", callback_data="cancel_dialog_action")], 
+            [InlineKeyboardButton("➕ Adicionar Outra Frase", callback_data="add_another_phrase")],
+            [InlineKeyboardButton("🏠 Voltar ao Menu Principal", callback_data="help_category:main_menu")],
+            [InlineKeyboardButton("❌ Sair", callback_data="cancel_dialog_action")],
         ]
         reply_markup = InlineKeyboardMarkup(keyboard)
-        await update.message.reply_text("O que você gostaria de fazer agora?", reply_markup=reply_markup, parse_mode=ParseMode.HTML) 
-        
-        context.user_data.clear() 
-        return AWAIT_NEXT_PHRASE_ACTION 
+        await update.message.reply_text("O que você gostaria de fazer agora?", reply_markup=reply_markup, parse_mode=ParseMode.HTML)
+
+        context.user_data.clear()
+        return AWAIT_NEXT_PHRASE_ACTION
 
     else:
         await update.message.reply_text(
@@ -208,19 +254,19 @@ async def get_response_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE
 async def handle_next_phrase_action(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     query = update.callback_query
     await query.answer()
-    action = query.data 
+    action = query.data
 
-    if action == "add_another_phrase": 
-        await query.edit_message_text("Ótimo! Qual a próxima frase ou palavra que deve <b>ativar</b> a minha resposta?", parse_mode=ParseMode.HTML) 
-        return GETTING_TRIGGER_PHRASE 
-    elif action == "help_category:main_menu": 
-        await send_main_help_menu(update, context) 
-        return ConversationHandler.END 
-    elif action == "cancel_dialog_action": 
-        await cancel_dialog(update, context) 
-        return ConversationHandler.END 
-    
-    return ConversationHandler.END 
+    if action == "add_another_phrase":
+        await query.edit_message_text("Ótimo! Qual a próxima frase ou palavra que deve <b>ativar</b> a minha resposta?", parse_mode=ParseMode.HTML)
+        return GETTING_TRIGGER_PHRASE
+    elif action == "help_category:main_menu":
+        await send_main_help_menu(update, context)
+        return ConversationHandler.END
+    elif action == "cancel_dialog_action":
+        await cancel_dialog(update, context)
+        return ConversationHandler.END
+
+    return ConversationHandler.END
 
 async def view_my_phrases(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Vê as frases personalizadas do usuário."""
@@ -233,14 +279,26 @@ async def view_my_phrases(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             escaped_trigger = html.escape(trigger)
             escaped_response = html.escape(response)
             message_text += f"<b>ID: {phrase_id}</b>\n<code>Gatilho</code>: {escaped_trigger}\n<code>Resposta</code>: {escaped_response}\n\n"
-        
+
         if update.effective_message:
-            await update.effective_message.reply_text(message_text, parse_mode=ParseMode.HTML)
+            try:
+                await update.effective_message.reply_text(message_text, parse_mode=ParseMode.HTML)
+            except telegram.error.BadRequest as e:
+                if "Message is not modified" in str(e) or "Message can't be edited" in str(e):
+                    await update.effective_message.reply_text(message_text, parse_mode=ParseMode.HTML)
+                else:
+                    raise e
         logger.info(f"Frases personalizadas exibidas para {user_id}.")
     else:
         no_phrases_text = "Você ainda não adicionou nenhuma frase personalizada. Use /addfrase para adicionar uma!"
         if update.effective_message:
-            await update.effective_message.reply_text(no_phrases_text)
+            try:
+                await update.effective_message.reply_text(no_phrases_text)
+            except telegram.error.BadRequest as e:
+                if "Message is not modified" in str(e) or "Message can't be edited" in str(e):
+                    await update.effective_message.reply_text(no_phrases_text)
+                else:
+                    raise e
         logger.info(f"Nenhuma frase personalizada encontrada para {user_id}.")
 
     keyboard = [
@@ -260,7 +318,6 @@ async def view_my_phrases(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         await update.message.reply_text("O que você gostaria de fazer agora?", reply_markup=reply_markup, parse_mode=ParseMode.HTML)
     logger.info(f"Menu de opções após listar frases enviado para {user_id}.")
 
-
 async def delete_phrase_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Inicia o diálogo para apagar uma frase, exibindo-as como botões."""
     user_id = update.effective_user.id
@@ -274,14 +331,14 @@ async def delete_phrase_start(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     message_text = "📚 Suas frases personalizadas:\n\n" \
                    "Selecione a frase que você deseja apagar:"
-    
+
     keyboard = []
     for phrase_id, trigger, response in phrases:
         button_text = f"ID {phrase_id}: \"{trigger}\" -> \"{response}\""
         if len(button_text) > 64:
-            button_text = button_text[:61] + "..." 
+            button_text = button_text[:61] + "..."
         keyboard.append([InlineKeyboardButton(button_text, callback_data=f"delete_phrase_id:{phrase_id}")])
-    
+
     keyboard.append([InlineKeyboardButton("❌ Cancelar", callback_data="cancel_dialog_action")])
 
     reply_markup = InlineKeyboardMarkup(keyboard)
@@ -299,7 +356,7 @@ async def delete_phrase_start(update: Update, context: ContextTypes.DEFAULT_TYPE
             reply_markup=reply_markup,
             parse_mode=ParseMode.HTML
         )
-    
+
     return AWAIT_NEXT_DELETE_ACTION
 
 async def delete_phrase_select_and_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -314,14 +371,14 @@ async def delete_phrase_select_and_confirm(update: Update, context: ContextTypes
         return ConversationHandler.END
 
     user_id = query.from_user.id
-    
+
     if db.delete_personal_phrase(phrase_id, user_id):
         confirmation_message = f"🗑️ Frase ID <b>{phrase_id}</b> apagada com sucesso!"
         logger.info(f"Frase ID {phrase_id} apagada por {user_id}.")
     else:
         confirmation_message = f"❌ Não foi possível apagar a frase ID <b>{phrase_id}</b>. Verifique se o ID está correto ou se você tem permissão."
         logger.warning(f"Falha ao apagar frase ID {phrase_id} por {user_id}.")
-    
+
     await query.edit_message_text(confirmation_message, parse_mode=ParseMode.HTML)
 
     keyboard = [
@@ -349,7 +406,7 @@ async def handle_next_delete_action(update: Update, context: ContextTypes.DEFAUL
     elif action == "cancel_dialog_action":
         await cancel_dialog(update, context)
         return ConversationHandler.END
-    
+
     return ConversationHandler.END
 
 async def handle_personal_phrase(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -370,7 +427,7 @@ async def cancel_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         await update.callback_query.edit_message_text("Operação cancelada.", parse_mode=ParseMode.HTML)
     elif update.message:
         await update.message.reply_text("Operação cancelada. Estou à disposição para o que precisar!", parse_mode=ParseMode.HTML)
-    
+
     logger.info(f"Diálogo/Operação cancelada por {update.effective_user.id}.")
     context.user_data.clear()
     return ConversationHandler.END

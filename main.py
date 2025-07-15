@@ -1,5 +1,3 @@
-# main.py
-
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, ConversationHandler, CallbackQueryHandler, ContextTypes
 from telegram import Update
 import handlers
@@ -33,7 +31,7 @@ def main():
     db.insert_command("minhasfrases", "handlers.view_my_phrases", "Vê suas frases personalizadas.")
     db.insert_command("apagarfrase", "handlers.delete_phrase_start", "Apaga uma frase personalizada existente.")
     db.insert_command("novalista", "list_handlers.new_list_start", "Cria uma nova lista (ex: de compras, tarefas).")
-    db.insert_command("listas", "list_handlers.list_my_lists", "Vê todas as suas listas existentes.")
+    db.insert_command("listas", "list_handlers.list_my_lists_menu", "Gerencia suas listas existentes.") 
     db.insert_command("verlista", "list_handlers.view_list_start", "Vê os itens de uma lista específica.")
     db.insert_command("additem", "list_handlers.add_item_start", "Adiciona um item a uma lista existente.")
     db.insert_command("marcaritem", "list_handlers.toggle_item_start", "Marca/desmarca um item de uma lista como completo.")
@@ -57,6 +55,10 @@ def main():
     # Handler para o botão "Sair" unificado (agora também no menu principal)
     application.add_handler(CallbackQueryHandler(handlers.cancel_dialog, pattern=r"^cancel_dialog_action$"))
 
+    # --- NOVO HANDLER PARA BOTÕES 'SHOW COMMAND' ---
+    # Este handler captura os callbacks dos botões "Iniciar Conversa" e "Menu de Ajuda"
+    application.add_handler(CallbackQueryHandler(handlers.show_command_and_return_to_main_menu, pattern=r"^show_command:/(start|ajuda)$"))
+
 
     # --- Registra os ConversationHandlers ---
 
@@ -71,7 +73,7 @@ def main():
             handlers.GETTING_RESPONSE_PHRASE: [MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.get_response_phrase)],
             handlers.AWAIT_NEXT_PHRASE_ACTION: [CallbackQueryHandler(handlers.handle_next_phrase_action, pattern="^(add_another_phrase|help_category:main_menu|cancel_dialog_action)$")],
         },
-        fallbacks=[CommandHandler("cancelar", handlers.cancel_dialog)],
+        fallbacks=[CommandHandler("cancelar", handlers.cancel_dialog)], # Usar handlers.cancel_dialog
         allow_reentry=True
     )
     # ConversationHandler para Apagar Frase com seleção por botão
@@ -86,86 +88,127 @@ def main():
                 CallbackQueryHandler(handlers.handle_next_delete_action, pattern="^(delete_another_phrase|help_category:main_menu|cancel_dialog_action)$"),
             ],
         },
-        fallbacks=[CommandHandler("cancelar", handlers.cancel_dialog)],
+        fallbacks=[CommandHandler("cancelar", handlers.cancel_dialog)], # Usar handlers.cancel_dialog
         allow_reentry=True
     )
 
     # Listas
+    application.add_handler(CommandHandler("listas", list_handlers.list_my_lists_menu))
+    application.add_handler(CallbackQueryHandler(list_handlers.list_my_lists_menu, pattern=r"^command:/listas$"))
+    
+    # Este CallbackQueryHandler é para as ações GLOBAIS do menu de listas que SÃO APENAS NAVEGAÇÃO ou CANCELAMENTO
+    application.add_handler(CallbackQueryHandler(list_handlers.handle_list_item_action_callbacks, 
+                                                 pattern=r"^list_action:main_menu$|" + 
+                                                         r"^help_category:main_menu$|" + 
+                                                         r"^cancel_list_action$")) 
+
+    # --- ConversationHandlers de Listas ---
+    # Cada CH agora tem seus próprios entry_points para os botões do menu principal de listas
+
     new_list_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("novalista", list_handlers.new_list_start)],
+        entry_points=[
+            CommandHandler("novalista", list_handlers.new_list_start),
+            CallbackQueryHandler(list_handlers.new_list_start, pattern=r"^list_action:new_list$") 
+        ],
         states={
             list_handlers.SELECTING_LIST_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, list_handlers.get_list_name)],
         },
-        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)],
+        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)], # CORREÇÃO: Usar list_handlers.cancel_list_dialog
         allow_reentry=True
     )
+    
     view_list_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("verlista", list_handlers.view_list_start)],
+        entry_points=[
+            CommandHandler("verlista", list_handlers.view_list_start),
+            CallbackQueryHandler(list_handlers.view_list_start, pattern=r"^list_action:select_existing_list$"), 
+            CallbackQueryHandler(lambda update, context: list_handlers.view_list_start(update, context, pre_selected_list_id=int(update.callback_query.data.split(':')[2])), pattern=r"^list_action:view_items:(\d+)$") 
+        ],
         states={
             list_handlers.VIEWING_LIST_COMMAND_START: [
-                CallbackQueryHandler(list_handlers.get_list_to_view, pattern=r'^select_list_id:\d+$'),
-                CallbackQueryHandler(list_handlers.get_list_to_view, pattern=r'^view_lists_back$'),
-                CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$')
+                CallbackQueryHandler(list_handlers.get_list_to_view, pattern=r'^select_list_id_for_action:\d+$'), 
+                CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$'), 
+                CallbackQueryHandler(list_handlers.list_my_lists_menu, pattern="^list_action:main_menu$"), 
+                CallbackQueryHandler(handlers.send_main_help_menu, pattern="^help_category:main_menu$"), 
             ],
         },
-        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)],
+        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)], # CORREÇÃO: Usar list_handlers.cancel_list_dialog
         allow_reentry=True
     )
+    
     add_item_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("additem", list_handlers.add_item_start)],
+        entry_points=[
+            CommandHandler("additem", list_handlers.add_item_start),
+            CallbackQueryHandler(list_handlers.add_item_start, pattern=r"^list_action:add_item$"), 
+            CallbackQueryHandler(lambda update, context: list_handlers.add_item_start(update, context, pre_selected_list_id=int(update.callback_query.data.split(':')[2])), pattern=r"^list_action:add_item_to_list:(\d+)$")
+        ],
         states={
             list_handlers.SELECTING_LIST_TO_ADD_ITEM: [
-                CallbackQueryHandler(list_handlers.handle_list_item_action_callbacks, pattern=r'^select_list_id:\d+$'),
-                CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$')
+                CallbackQueryHandler(list_handlers.get_list_to_add_item, pattern=r'^select_list_id_for_action:\d+$'),
+                CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$') 
             ],
             list_handlers.GETTING_ITEM_TEXT: [
                 MessageHandler(filters.TEXT & ~filters.COMMAND, list_handlers.get_item_text),
-                CommandHandler("cancelar", list_handlers.cancel_list_dialog)
+                CommandHandler("cancelar", list_handlers.cancel_list_dialog) # CORREÇÃO: Usar list_handlers.cancel_list_dialog
             ],
         },
-        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)],
+        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)], # CORREÇÃO: Usar list_handlers.cancel_list_dialog
         allow_reentry=True
     )
     toggle_item_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("marcaritem", list_handlers.toggle_item_start)],
+        entry_points=[
+            CommandHandler("marcaritem", list_handlers.toggle_item_start),
+            CallbackQueryHandler(list_handlers.toggle_item_start, pattern=r"^list_action:toggle_item$"), 
+            CallbackQueryHandler(lambda update, context: list_handlers.toggle_item_start(update, context, pre_selected_list_id=int(update.callback_query.data.split(':')[2])), pattern=r"^list_action:toggle_item_in_list:(\d+)$")
+        ],
         states={
             list_handlers.SELECTING_LIST_TO_TOGGLE: [
-                CallbackQueryHandler(list_handlers.handle_list_item_action_callbacks, pattern=r'^select_list_id:\d+$'),
-                CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$')
+                CallbackQueryHandler(list_handlers.get_list_to_toggle_item, pattern=r'^select_list_id_for_action:\d+$'), 
+                CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$') 
             ],
             list_handlers.GETTING_ITEM_ID_TO_TOGGLE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, list_handlers.get_item_id_to_toggle),
-                CommandHandler("cancelar", list_handlers.cancel_list_dialog)
+                CallbackQueryHandler(list_handlers.process_toggle_item_callback, pattern=r'^toggle_item_id:\d+$'), 
+                CommandHandler("cancelar", list_handlers.cancel_list_dialog) # CORREÇÃO: Usar list_handlers.cancel_list_dialog
             ],
         },
-        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)],
+        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)], # CORREÇÃO: Usar list_handlers.cancel_list_dialog
         allow_reentry=True
     )
     remove_item_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("removeritem", list_handlers.remove_item_start)],
+        entry_points=[
+            CommandHandler("removeritem", list_handlers.remove_item_start),
+            CallbackQueryHandler(list_handlers.remove_item_start, pattern=r"^list_action:remove_item$"), 
+            CallbackQueryHandler(lambda update, context: list_handlers.remove_item_start(update, context, pre_selected_list_id=int(update.callback_query.data.split(':')[2])), pattern=r"^list_action:remove_item_from_list:(\d+)$")
+        ],
         states={
             list_handlers.SELECTING_LIST_TO_REMOVE: [
-                CallbackQueryHandler(list_handlers.handle_list_item_action_callbacks, pattern=r'^select_list_id:\d+$'),
-                CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$')
+                CallbackQueryHandler(list_handlers.get_list_to_remove_item, pattern=r'^select_list_id_for_action:\d+$'), 
+                CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$') 
             ],
             list_handlers.GETTING_ITEM_ID_TO_REMOVE: [
-                MessageHandler(filters.TEXT & ~filters.COMMAND, list_handlers.get_item_id_to_remove),
-                CommandHandler("cancelar", list_handlers.cancel_list_dialog)
+                CallbackQueryHandler(list_handlers.process_remove_item_callback, pattern=r'^remove_item_id:\d+$'), 
+                CommandHandler("cancelar", list_handlers.cancel_list_dialog) # CORREÇÃO: Usar list_handlers.cancel_list_dialog
             ],
         },
-        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)],
+        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)], # CORREÇÃO: Usar list_handlers.cancel_list_dialog
         allow_reentry=True
     )
     delete_list_conv_handler = ConversationHandler(
-        entry_points=[CommandHandler("apagarlista", list_handlers.delete_list_start)],
+        entry_points=[
+            CommandHandler("apagarlista", list_handlers.delete_list_start),
+            CallbackQueryHandler(list_handlers.delete_list_start, pattern=r"^list_action:delete_list$"), 
+            CallbackQueryHandler(lambda update, context: list_handlers.delete_list_start(update, context, pre_selected_list_id=int(update.callback_query.data.split(':')[2])), pattern=r"^list_action:delete_specific_list:(\d+)$")
+        ],
         states={
+            list_handlers.SELECTING_LIST_TO_DELETE: [ 
+                CallbackQueryHandler(list_handlers.get_list_to_delete, pattern=r'^select_list_id_for_action:\d+$'), 
+                CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$') 
+            ],
             list_handlers.CONFIRM_DELETE_LIST: [
-                CallbackQueryHandler(list_handlers.handle_list_item_action_callbacks, pattern=r'^select_list_id:\d+$'),
-                CallbackQueryHandler(list_handlers.handle_list_item_action_callbacks, pattern=r'^confirm_delete_list_action:\d+$'),
-                CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$')
+                CallbackQueryHandler(list_handlers.delete_list_confirm_action, pattern=r'^confirm_delete_list_action:\d+$'), 
+                CallbackQueryHandler(list_handlers.cancel_list_dialog, pattern='^cancel_list_action$') 
             ],
         },
-        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)],
+        fallbacks=[CommandHandler("cancelar", list_handlers.cancel_list_dialog)], # CORREÇÃO: Usar list_handlers.cancel_list_dialog
         allow_reentry=True
     )
 
@@ -180,7 +223,7 @@ def main():
                 CallbackQueryHandler(handlers.cancel_dialog, pattern="^cancel_reminder_add$")
             ],
         },
-        fallbacks=[CommandHandler("cancelar", handlers.cancel_dialog)],
+        fallbacks=[CommandHandler("cancelar", handlers.cancel_dialog)], # Usar handlers.cancel_dialog
         allow_reentry=True
     )
     delete_reminder_conv_handler = ConversationHandler(
@@ -188,7 +231,7 @@ def main():
         states={
             reminders_handlers.GETTING_REMINDER_ID_FOR_DELETE: [MessageHandler(filters.TEXT & ~filters.COMMAND, reminders_handlers.delete_reminder_confirm)],
         },
-        fallbacks=[CommandHandler("cancelar", handlers.cancel_dialog)],
+        fallbacks=[CommandHandler("cancelar", handlers.cancel_dialog)], # Usar handlers.cancel_dialog
         allow_reentry=True
     )
 
@@ -198,7 +241,6 @@ def main():
     application.add_handler(add_phrase_conv_handler)
     application.add_handler(delete_phrase_conv_handler)
     application.add_handler(new_list_conv_handler)
-    application.add_handler(view_list_conv_handler)
     application.add_handler(add_item_conv_handler)
     application.add_handler(toggle_item_conv_handler)
     application.add_handler(remove_item_conv_handler)
@@ -206,8 +248,10 @@ def main():
     application.add_handler(add_reminder_conv_handler)
     application.add_handler(delete_reminder_conv_handler)
 
-    # REGISTRANDO O ÚNICO CONVERSATION HANDLER DE CONTAS
     application.add_handler(accounts_conv_handler)
+    
+    application.add_handler(view_list_conv_handler)
+
 
     # Handler para frases personalizadas (deve ser o último MessageHandler para não interceptar comandos)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handlers.handle_personal_phrase))
