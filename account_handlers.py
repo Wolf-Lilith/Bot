@@ -1,5 +1,3 @@
-# account_handlers.py
-
 import datetime
 import calendar
 import logging
@@ -8,8 +6,8 @@ import html # Importado para html.escape
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup 
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, CallbackQueryHandler, filters, CommandHandler 
 from telegram.constants import ParseMode 
-from telegram.helpers import escape_markdown 
-from handlers import send_main_help_menu # Adicione esta linha
+# from telegram.helpers import escape_markdown # Não é mais necessário, usando HTML com \n
+from handlers import send_main_help_menu # Mantido para permitir o retorno ao menu principal do bot
 import accounts_db # Importa o módulo de banco de dados para contas
 
 logger = logging.getLogger(__name__)
@@ -17,7 +15,7 @@ logger = logging.getLogger(__name__)
 # --- Estados para o ConversationHandler de Contas (valores altos para evitar conflitos) ---
 ADD_ACCOUNT_NAME = 100
 ADD_ACCOUNT_AMOUNT = 101
-ADD_ACCOUNT_DUE_DATE = 102
+ADD_ACCOUNT_DUE_DATE = 102 # Este estado não é mais diretamente usado para entrada, mas como referência para o calendário
 ADD_ACCOUNT_RECURRENCE = 103
 ADD_ACCOUNT_PARCEL_COUNT = 104
 GETTING_ACCOUNT_DATE_FROM_CALENDAR = 105
@@ -29,7 +27,7 @@ CONFIRM_DELETE_RECURRING_ACCOUNT = 121 # NOVO ESTADO: Para confirmar exclusão d
 
 ADD_INCOME_DESCRIPTION = 130
 ADD_INCOME_AMOUNT = 131
-ADD_INCOME_DATE = 132
+ADD_INCOME_DATE = 132 # Este estado não é mais diretamente usado para entrada, mas como referência para o calendário
 GETTING_INCOME_DATE_FROM_CALENDAR = 133
 
 GET_INCOME_ID_TO_DELETE = 140 # Estado para deletar entradas
@@ -41,19 +39,17 @@ NAVIGATING_MONTHS = 160 # Estado para lidar com a navegação de meses no resumo
 async def send_or_edit_message(update: Update, text: str, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = ParseMode.HTML): 
     """
     Envia uma nova mensagem ou edita uma existente, dependendo da origem da atualização (callback_query ou message).
-    O texto deve ser pré-formatado com tags HTML.
+    O texto DEVE ser pré-formatado com tags HTML e com '\n' para quebras de linha.
     """
-    final_text = text 
-
     if update.callback_query:
         await update.callback_query.answer()
         try:
-            await update.callback_query.edit_message_text(final_text, reply_markup=reply_markup, parse_mode=parse_mode)
+            await update.callback_query.edit_message_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
         except Exception as e:
             logger.error(f"Erro ao editar mensagem textual via callback: {e}. Enviando nova mensagem textual como fallback.")
-            await update.callback_query.message.reply_text(final_text, reply_markup=reply_markup, parse_mode=parse_mode)
+            await update.callback_query.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
     elif update.message:
-        await update.message.reply_text(final_text, reply_markup=reply_markup, parse_mode=parse_mode)
+        await update.message.reply_text(text, reply_markup=reply_markup, parse_mode=parse_mode)
 
 
 # --- Funções de Handler para Contas Financeiras ---
@@ -97,7 +93,6 @@ async def accounts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     summary_buttons_data = []
 
-    # Os valores monetários em botões são texto puro e não precisam de escape HTML.
     summary_buttons_data.append(
         [InlineKeyboardButton(f"SALDO ATUAL: R$ {summary['final_balance_this_month']:.2f} {emoji_status_final_balance}", callback_data="ignore_summary_data_balance")]
     )
@@ -126,9 +121,9 @@ async def accounts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     first_message_reply_markup = InlineKeyboardMarkup(summary_buttons_data)
     
     # Envia a PRIMEIRA MENSAGEM (cabeçalho + botões de resumo)
-    if update.callback_query: # Se veio de um callback, envia a nova mensagem no chat do usuário
+    if update.callback_query: 
         await update.effective_chat.send_message(text=header_text_part1, reply_markup=first_message_reply_markup, parse_mode=ParseMode.HTML)
-    elif update.message: # Se veio de um comando /contas
+    elif update.message: 
         await update.message.reply_text(text=header_text_part1, reply_markup=first_message_reply_markup, parse_mode=ParseMode.HTML)
 
 
@@ -153,9 +148,9 @@ async def accounts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     second_message_reply_markup = InlineKeyboardMarkup(action_buttons)
 
     # Envia a SEGUNDA MENSAGEM (texto do rodapé + botões de ação)
-    if update.callback_query: # Se veio de um callback, envia a nova mensagem no chat do usuário
+    if update.callback_query: 
         await update.effective_chat.send_message(text=footer_text_part2, reply_markup=second_message_reply_markup, parse_mode=ParseMode.HTML)
-    elif update.message: # Se veio de um comando /contas
+    elif update.message: 
         await update.message.reply_text(text=footer_text_part2, reply_markup=second_message_reply_markup, parse_mode=ParseMode.HTML)
 
     logger.info(f"Menu de contas exibido em duas mensagens para {user_id} para {month_name}/{current_year}.")
@@ -164,29 +159,24 @@ async def accounts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 async def handle_accounts_menu_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Lida com a seleção de opções no menu principal de contas, incluindo navegação de mês."""
     query = update.callback_query
-    await query.answer() # Sempre responde ao callback
+    await query.answer() 
 
     data = query.data.split(':')
-    action_type = data[0] # Ex: 'accounts_action', 'accounts_nav', 'ignore_summary_data'
+    action_type = data[0] 
 
-    # Se o callback_data for um dos botões de "ignorar", apenas responde ao callback e permanece no estado
     if action_type.startswith("ignore_summary_data"): 
-        return VIEW_ACCOUNTS_MENU # Permanece no mesmo estado, sem mudança
+        return VIEW_ACCOUNTS_MENU 
 
-    action_value = data[1] # Ação real, se não for ignore_summary_data
+    action_value = data[1] 
 
-    # Ações que exigem recriar a tela de duas mensagens do menu principal
     if action_type == "accounts_action" and action_value in ["back_to_accounts_menu", "main_menu_bot"]:
-        # Se for voltar ao menu principal do bot (fim do conversation), limpa user_data
         if action_value == "main_menu_bot":
             await send_or_edit_message(update, "Retornando ao menu principal do bot... 👋", parse_mode=ParseMode.HTML)
-            context.user_data.clear() # Limpa TUDO no user_data para um recomeço limpo
-            await send_main_help_menu(update, context)
+            context.user_data.clear() 
+            await send_main_help_menu(update, context) # Chama a função do handlers
             return ConversationHandler.END
-        # Se for apenas voltar para o menu de contas, recria o menu (que enviará duas mensagens)
-        return await accounts_menu(update, context) # Recria o menu de duas mensagens
+        return await accounts_menu(update, context) 
 
-    # Ações que levam a outros fluxos (só um return para o próximo estado/fluxo)
     if action_type == "accounts_action":
         if action_value == "add_account":
             return await add_account_start(update, context)
@@ -211,7 +201,7 @@ async def handle_accounts_menu_selection(update: Update, context: ContextTypes.D
             context.user_data['delete_year'] = context.user_data['current_accounts_year']
             return await delete_income_start(update, context)
     
-    elif action_type == "accounts_nav": # Ajustado para navegar no menu principal
+    elif action_type == "accounts_nav": 
         current_month = context.user_data.get('current_accounts_month', datetime.date.today().month)
         current_year = context.user_data.get('current_accounts_year', datetime.date.today().year)
 
@@ -223,10 +213,10 @@ async def handle_accounts_menu_selection(update: Update, context: ContextTypes.D
         context.user_data['current_accounts_month'] = current_month
         context.user_data['current_accounts_year'] = current_year
         
-        return await accounts_menu(update, context) # Recria o menu de duas mensagens
+        return await accounts_menu(update, context) 
 
     logger.warning(f"Ação de menu de contas não tratada: {query.data} por {update.effective_user.id}")
-    return await accounts_menu(update, context) # Em caso de ação desconhecida, recria o menu
+    return await accounts_menu(update, context) 
 
 # --- Funções de Calendário ---
 def create_calendar_keyboard(year: int, month: int) -> InlineKeyboardMarkup:
@@ -234,11 +224,11 @@ def create_calendar_keyboard(year: int, month: int) -> InlineKeyboardMarkup:
     keyboard = []
     # Cabeçalho: Mês e Ano
     keyboard.append([
-        InlineKeyboardButton("«", callback_data=f"cal:nav:{year-1}:{month}"), # Ano anterior
-        InlineKeyboardButton("<", callback_data=f"cal:nav:{year}:{month-1 if month > 1 else 12}"), # Mês anterior
-        InlineKeyboardButton(f"{calendar.month_name[month]} {year}", callback_data="cal:ignore"), # Mês e ano (não clicável)
-        InlineKeyboardButton(">", callback_data=f"cal:nav:{year}:{month+1 if month < 12 else 1}"), # Próximo mês
-        InlineKeyboardButton("»", callback_data=f"cal:nav:{year+1}:{month}") # Próximo ano
+        InlineKeyboardButton("«", callback_data=f"cal:nav:{year-1}:{month}"), 
+        InlineKeyboardButton("<", callback_data=f"cal:nav:{year}:{month-1 if month > 1 else 12}"), 
+        InlineKeyboardButton(f"{calendar.month_name[month]} {year}", callback_data="cal:ignore"), 
+        InlineKeyboardButton(">", callback_data=f"cal:nav:{year}:{month+1 if month < 12 else 1}"), 
+        InlineKeyboardButton("»", callback_data=f"cal:nav:{year+1}:{month}") 
     ])
 
     # Dias da semana
@@ -246,12 +236,12 @@ def create_calendar_keyboard(year: int, month: int) -> InlineKeyboardMarkup:
     keyboard.append([InlineKeyboardButton(day, callback_data="cal:ignore") for day in week_days])
 
     # Dias do mês
-    cal = calendar.Calendar(firstweekday=6) # 6 = domingo como primeiro dia da semana
+    cal = calendar.Calendar(firstweekday=6) 
     for week in cal.monthdayscalendar(year, month):
         row = []
         for day in week:
             if day == 0:
-                row.append(InlineKeyboardButton(" ", callback_data="cal:ignore")) # Dias vazios
+                row.append(InlineKeyboardButton(" ", callback_data="cal:ignore")) 
             else:
                 row.append(InlineKeyboardButton(str(day), callback_data=f"cal:date:{year}:{month}:{day}"))
         keyboard.append(row)
@@ -265,11 +255,11 @@ async def send_calendar_message(update: Update, context: ContextTypes.DEFAULT_TY
     year = context.user_data.get(f'{prefix}_cal_year', current_date.year)
     month = context.user_data.get(f'{prefix}_cal_month', current_date.month)
 
-    # Armazenar o prefixo para saber qual fluxo de data estamos
     context.user_data['calendar_flow_prefix'] = prefix
 
     keyboard = create_calendar_keyboard(year, month)
-    # Usar html.escape para strings que podem vir do usuário para evitar problemas com < > &
+    # Aqui, html.escape é usado porque context.user_data[f'{prefix}_type'] vem do código, não do usuário.
+    # Mas é um bom hábito para qualquer string que possa conter < ou >.
     escaped_type = html.escape(context.user_data[f'{prefix}_type'])
 
     text = f"🗓️ Selecione a data para a {escaped_type}:"
@@ -279,7 +269,7 @@ async def send_calendar_message(update: Update, context: ContextTypes.DEFAULT_TY
     elif update.message:
         await update.message.reply_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
     
-    return context.user_data[f'{prefix}_next_state_calendar'] # Retorna o estado de espera de clique no calendário
+    return context.user_data[f'{prefix}_next_state_calendar'] 
 
 async def handle_calendar_callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Lida com os callbacks dos botões do calendário."""
@@ -289,9 +279,8 @@ async def handle_calendar_callback(update: Update, context: ContextTypes.DEFAULT
     data_parts = query.data.split(':')
     action = data_parts[1]
     
-    # Recupera o prefixo para saber se estamos no fluxo de conta ou entrada
     prefix = context.user_data.get('calendar_flow_prefix')
-    if not prefix: # Caso de erro, volta pro menu
+    if not prefix: 
         await send_or_edit_message(update, "Houve um erro no fluxo do calendário. Por favor, tente novamente do menu principal.", parse_mode=ParseMode.HTML)
         context.user_data.clear()
         return await accounts_menu(update, context)
@@ -304,33 +293,29 @@ async def handle_calendar_callback(update: Update, context: ContextTypes.DEFAULT
 
         context.user_data[f'{prefix}_selected_date'] = selected_date.strftime('%Y-%m-%d')
         
-        # Agora, a partir daqui, o fluxo continua para a próxima etapa, que depende do prefixo
         if prefix == 'account':
             return await get_account_recurrence_prompt(update, context)
         elif prefix == 'income':
             return await process_income_data(update, context)
 
     elif action == "nav":
-        # Extrair os componentes de data da callback_data
         year = int(data_parts[2])
         month = int(data_parts[3])
 
-        # Armazenar para persistência na navegação
         context.user_data[f'{prefix}_cal_year'] = year
         context.user_data[f'{prefix}_cal_month'] = month
 
         keyboard = create_calendar_keyboard(year, month)
-        import html # Importação adicionada aqui para uso local
         escaped_type = html.escape(context.user_data[f'{prefix}_type'])
         text = f"🗓️ Selecione a data para a {escaped_type}:"
 
         await query.edit_message_text(text, reply_markup=keyboard, parse_mode=ParseMode.HTML)
-        return context.user_data[f'{prefix}_next_state_calendar'] # Permanece no estado de espera de clique no calendário
+        return context.user_data[f'{prefix}_next_state_calendar'] 
 
     elif action == "cancel":
-        return await cancel_accounts_flow(update, context) # Retorna ao menu principal de contas
+        return await cancel_accounts_flow(update, context) 
 
-    return context.user_data[f'{prefix}_next_state_calendar'] # Permanece no estado atual se for um 'ignore'
+    return context.user_data[f'{prefix}_next_state_calendar'] 
 
 # --- Adicionar Conta/Despesa ---
 async def add_account_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -342,7 +327,7 @@ async def add_account_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def get_account_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Recebe o nome da conta."""
-    context.user_data['account_name'] = update.message.text.strip()
+    context.user_data['account_name'] = html.escape(update.message.text.strip()) # Escape do input do usuário
     await send_or_edit_message(update, "Qual o valor dessa conta (ex: 1500.50)?", parse_mode=ParseMode.HTML)
     return ADD_ACCOUNT_AMOUNT
 
@@ -355,11 +340,9 @@ async def get_account_amount(update: Update, context: ContextTypes.DEFAULT_TYPE)
             return ADD_ACCOUNT_AMOUNT
         context.user_data['account_amount'] = amount
         
-        # Define os dados para o fluxo do calendário
         context.user_data['account_type'] = "conta/despesa"
         context.user_data['account_next_state_calendar'] = GETTING_ACCOUNT_DATE_FROM_CALENDAR
         
-        # Chama a função para enviar o calendário
         return await send_calendar_message(update, context, 'account')
 
     except ValueError:
@@ -372,7 +355,7 @@ async def get_account_recurrence_prompt(update: Update, context: ContextTypes.DE
         [InlineKeyboardButton("Sem Recorrência", callback_data="none")],
         [InlineKeyboardButton("Mensal (Indefinido)", callback_data="indefinite")],
         [InlineKeyboardButton("Parcelado (Nº de Parcelas)", callback_data="fixed_parcel")],
-        [InlineKeyboardButton("Cancelar", callback_data="cal:cancel")] # Usando o cancel do calendário
+        [InlineKeyboardButton("Cancelar", callback_data="cal:cancel")] 
     ]
     reply_markup = InlineKeyboardMarkup(keyboard)
 
@@ -385,7 +368,7 @@ async def get_account_recurrence(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
     recurrence = query.data
 
-    if recurrence == "cal:cancel": # Botão de cancelar do calendário
+    if recurrence == "cal:cancel": 
         return await cancel_accounts_flow(update, context)
 
     context.user_data['account_recurrence'] = recurrence
@@ -393,13 +376,12 @@ async def get_account_recurrence(update: Update, context: ContextTypes.DEFAULT_T
     if recurrence == 'fixed_parcel':
         await send_or_edit_message(update, "Quantas parcelas (número inteiro)?", parse_mode=ParseMode.HTML)
         return ADD_ACCOUNT_PARCEL_COUNT
-    else: # 'none' ou 'indefinite'
+    else: 
         name = context.user_data['account_name']
         amount = context.user_data['account_amount']
-        due_date = context.user_data['account_selected_date'] # Data do calendário
+        due_date = context.user_data['account_selected_date'] 
         user_id = query.from_user.id
 
-        # Para HTML, a formatação <b> e literal
         message_text = f"🎉 Conta '<b>{name}</b>' (R$ {amount:.2f}) adicionada com sucesso como <b>{recurrence}</b>!"
 
         if accounts_db.add_monthly_account(user_id, name, amount, due_date, recurrence):
@@ -409,7 +391,6 @@ async def get_account_recurrence(update: Update, context: ContextTypes.DEFAULT_T
             await send_or_edit_message(update, "❌ Ops! Não foi possível adicionar a conta. Talvez ela já exista ou houve um erro no banco de dados.", parse_mode=ParseMode.HTML)
             logger.warning(f"Falha ao adicionar conta '{name}' para {user_id}.")
         
-        # Limpa os dados do user_data específicos deste fluxo
         context.user_data.pop('account_name', None)
         context.user_data.pop('account_amount', None)
         context.user_data.pop('account_selected_date', None)
@@ -420,7 +401,7 @@ async def get_account_recurrence(update: Update, context: ContextTypes.DEFAULT_T
         context.user_data.pop('account_cal_year', None)
         context.user_data.pop('account_cal_month', None)
         
-        return await accounts_menu(update, context) # Retorna para o menu de contas
+        return await accounts_menu(update, context) 
 
 async def get_account_parcel_count(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Recebe o número de parcelas para contas fixas."""
@@ -434,13 +415,12 @@ async def get_account_parcel_count(update: Update, context: ContextTypes.DEFAULT
 
         name = context.user_data['account_name']
         amount = context.user_data['account_amount']
-        due_date = context.user_data['account_selected_date'] # Data do calendário
+        due_date = context.user_data['account_selected_date'] 
         recurrence = context.user_data['account_recurrence']
         user_id = update.effective_user.id
 
         message_text = f"🎉 Conta '<b>{name}</b>' (R$ {amount:.2f}) adicionada com sucesso como parcelada em <b>{parcel_count}x</b>!"
         
-        # CORREÇÃO CRUCIAL AQUI: Removido 'current_parcel=1' da chamada de add_monthly_account
         if accounts_db.add_monthly_account(user_id, name, amount, due_date, recurrence, parcel_count):
             await send_or_edit_message(update, message_text, parse_mode=ParseMode.HTML)
             logger.info(f"Conta '{name}' adicionada por {user_id} como parcelada.")
@@ -448,7 +428,6 @@ async def get_account_parcel_count(update: Update, context: ContextTypes.DEFAULT
             await send_or_edit_message(update, "❌ Ops! Não foi possível adicionar a conta. Talvez ela já exista ou houve um erro no banco de dados.", parse_mode=ParseMode.HTML)
             logger.warning(f"Falha ao adicionar conta parcelada '{name}' para {user_id}.")
         
-        # Limpa os dados do user_data específicos deste fluxo
         context.user_data.pop('account_name', None)
         context.user_data.pop('account_amount', None)
         context.user_data.pop('account_selected_date', None)
@@ -460,7 +439,7 @@ async def get_account_parcel_count(update: Update, context: ContextTypes.DEFAULT
         context.user_data.pop('account_cal_year', None)
         context.user_data.pop('account_cal_month', None)
         
-        return await accounts_menu(update, context) # Retorna para o menu de contas
+        return await accounts_menu(update, context) 
     except ValueError:
         await send_or_edit_message(update, "Número de parcelas inválido. Por favor, insira um número inteiro.", parse_mode=ParseMode.HTML)
         return ADD_ACCOUNT_PARCEL_COUNT
@@ -478,7 +457,7 @@ async def mark_account_paid_start(update: Update, context: ContextTypes.DEFAULT_
     accounts = accounts_db.get_monthly_accounts(user_id, current_month, current_year)
 
     # Filtra apenas as contas PENDENTES para marcar como paga
-    pending_accounts = [acc for acc in accounts if not acc[4]] # acc[4] é is_paid
+    pending_accounts = [acc for acc in accounts if not acc[4]] 
 
     month_display = datetime.date(current_year, current_month, 1).strftime('%B/%Y')
     message_text = f"✅ <b>Marcar contas como pagas ({month_display}):</b>\n\n"
@@ -490,9 +469,8 @@ async def mark_account_paid_start(update: Update, context: ContextTypes.DEFAULT_
         for acc_id, name, amount, due_date, is_paid, recurrence, parcel_count, current_parcel, template_id in pending_accounts:
             status = "✅ PAGA" if is_paid else "❌ PENDENTE"
             try:
-                # Formato DD/MM para exibição
                 due_date_display = datetime.datetime.strptime(due_date, '%Y-%m-%d').strftime('%d/%m')
-            except (ValueError, TypeError): # Lida com due_date sendo None ou formato inválido
+            except (ValueError, TypeError): 
                 due_date_display = due_date if due_date else "N/A"
             
             recurrence_info = ""
@@ -501,7 +479,6 @@ async def mark_account_paid_start(update: Update, context: ContextTypes.DEFAULT_
             elif recurrence == 'indefinite':
                 recurrence_info = " (Recorrente)"
 
-            # No HTML, o conteúdo dentro dos botões é tratado como texto simples, então não precisa de tags HTML.
             button_text = f"{name} - R$ {amount:.2f} ({due_date_display}) | {status}{recurrence_info}"
             keyboard.append([InlineKeyboardButton(button_text, callback_data=f"mark_account:{acc_id}")])
 
@@ -511,18 +488,16 @@ async def mark_account_paid_start(update: Update, context: ContextTypes.DEFAULT_
     await send_or_edit_message(update, message_text, reply_markup, parse_mode=ParseMode.HTML)
 
     logger.info(f"Exibindo contas para marcar como pagas para {user_id}.")
-    return GET_ACCOUNT_ID_TO_MARK # Novo estado para aguardar o clique no botão da conta
+    return GET_ACCOUNT_ID_TO_MARK 
 
 async def mark_account_paid_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Confirma e marca a conta como paga APÓS O CLIQUE NO BOTÃO."""
     query = update.callback_query
-    await query.answer() # Responda ao callback imediatamente
+    await query.answer() 
 
-    # Verificar se é um callback do botão "Voltar"
     if query.data == "accounts_action:back_to_accounts_menu":
         return await accounts_menu(update, context)
 
-    # Se for um clique em um botão de conta (ex: "mark_account:123")
     if query.data.startswith("mark_account:"):
         user_id = query.from_user.id
         account_id = int(query.data.split(':')[1])
@@ -535,21 +510,18 @@ async def mark_account_paid_confirm(update: Update, context: ContextTypes.DEFAUL
             logger.warning(f"Falha ao marcar conta ID {account_id} como paga para {user_id}.")
         
         context.user_data.clear()
-        return await accounts_menu(update, context) # Retorna para o menu de contas após a operação
+        return await accounts_menu(update, context) 
     
-    # Se chegou aqui, é um callback inesperado, volta para o menu
     return await accounts_menu(update, context)
 
 # --- Funções Auxiliares de Navegação para Visualização e Deleção ---
 def build_month_navigation_keyboard(current_year: int, current_month: int, nav_prefix: str) -> list[list[InlineKeyboardButton]]:
     """Cria os botões de navegação de mês (Mês Anterior/Próximo Mês)."""
-    # Calcula o mês anterior
     prev_month_dt = datetime.date(current_year, current_month, 1) - datetime.timedelta(days=1)
-    prev_month_str = prev_month_dt.strftime('%Y-%m') # Formato 'AAAA-MM' para o callback_data
+    prev_month_str = prev_month_dt.strftime('%Y-%m') 
 
-    # Calcula o próximo mês
-    next_month_dt = datetime.date(current_year, current_month, 1) + datetime.timedelta(days=32) # Adiciona 32 dias para garantir que vai para o próximo mês
-    next_month_str = next_month_dt.strftime('%Y-%m') # Formato 'AAAA-MM' para o callback_data
+    next_month_dt = datetime.date(current_year, current_month, 1) + datetime.timedelta(days=32) 
+    next_month_str = next_month_dt.strftime('%Y-%m') 
 
     return [
         [
@@ -564,12 +536,11 @@ async def handle_view_navigation(update: Update, context: ContextTypes.DEFAULT_T
     await query.answer()
 
     data_parts = query.data.split(':')
-    nav_prefix = data_parts[0] # Ex: 'view_accounts_nav', 'delete_accounts_nav'
-    selected_month_str = data_parts[1] # Ex: '2025-07'
+    nav_prefix = data_parts[0] 
+    selected_month_str = data_parts[1] 
 
     year, month = map(int, selected_month_str.split('-'))
     
-    # Atualiza o user_data e chama a função de visualização/deleção apropriada
     if nav_prefix.startswith("view_accounts"):
         context.user_data['view_month'] = month
         context.user_data['view_year'] = year
@@ -588,8 +559,6 @@ async def handle_view_navigation(update: Update, context: ContextTypes.DEFAULT_T
         return await delete_income_start(update, context)
     
     logger.warning(f"Ação de menu de contas não tratada: {query.data}")
-    # Retorna o estado do menu de contas para manter a conversa ativa
-    # Isso é importante porque a navegação de meses em telas detalhadas não finaliza o ConversationHandler.
     return VIEW_ACCOUNTS_MENU 
 
 # --- Deletar Conta ---
@@ -597,21 +566,19 @@ async def delete_account_start(update: Update, context: ContextTypes.DEFAULT_TYP
     """Inicia o fluxo para deletar uma conta, listando-as com botões."""
     user_id = update.effective_user.id
     
-    # Usa o mês e ano do user_data para a visualização/deleção
     today = datetime.date.today()
     month = context.user_data.get('delete_month', context.user_data.get('current_accounts_month', today.month))
     year = context.user_data.get('delete_year', context.user_data.get('current_accounts_year', today.year))
     
-    # Salva o mês e ano para a navegação neste fluxo de deleção
     context.user_data['delete_month'] = month
     context.user_data['delete_year'] = year
 
-    accounts = accounts_db.get_monthly_accounts(user_id, month, year) # Filtra por mês e ano
+    accounts = accounts_db.get_monthly_accounts(user_id, month, year) 
 
     month_name = datetime.date(year, month, 1).strftime('%B').capitalize()
 
     message_text = f"🗑️ <b>Contas para deletar ({month_name}/{year}):</b>\n\n"
-    keyboard_buttons = [] # Lista para os botões das contas
+    keyboard_buttons = [] 
 
     if not accounts:
         message_text += "Você não tem contas registradas para este mês."
@@ -619,7 +586,6 @@ async def delete_account_start(update: Update, context: ContextTypes.DEFAULT_TYP
         for acc_id, name, amount, due_date, is_paid, recurrence, parcel_count, current_parcel, template_id in accounts:
             status = "✅ PAGA" if is_paid else "❌ PENDENTE"
             try:
-                # Formato DD/MM para exibição
                 due_date_display = datetime.datetime.strptime(due_date, '%Y-%m-%d').strftime('%d/%m')
             except (ValueError, TypeError):
                 due_date_display = due_date if due_date else "N/A"
@@ -630,22 +596,19 @@ async def delete_account_start(update: Update, context: ContextTypes.DEFAULT_TYP
             elif recurrence == 'indefinite':
                 recurrence_info = " (Recorrente)"
 
-            # No HTML, o conteúdo dentro dos botões é tratado como texto simples.
             button_text = f"{name} - R$ {amount:.2f} ({due_date_display}) | {status}{recurrence_info}"
             keyboard_buttons.append([InlineKeyboardButton(button_text, callback_data=f"delete_account:{acc_id}")])
     
-    # Adiciona os botões de navegação de mês e o botão de voltar
     month_nav_keyboard = build_month_navigation_keyboard(year, month, "delete_accounts_nav")
     back_button = [InlineKeyboardButton("↩️ Voltar ao Menu de Contas", callback_data="accounts_action:back_to_accounts_menu")]
 
-    # Concatena os botões das contas com os botões de navegação e o de voltar
     final_keyboard = keyboard_buttons + month_nav_keyboard + [back_button]
     reply_markup = InlineKeyboardMarkup(final_keyboard)
 
     await send_or_edit_message(update, message_text, reply_markup, parse_mode=ParseMode.HTML)
     
     logger.info(f"Exibindo contas para deletar para {user_id} para {month_name}/{year}.")
-    return GET_ACCOUNT_ID_TO_DELETE # Novo estado para aguardar o clique no botão da conta
+    return GET_ACCOUNT_ID_TO_DELETE 
 
 async def delete_account_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """
@@ -656,17 +619,13 @@ async def delete_account_confirm(update: Update, context: ContextTypes.DEFAULT_T
     query = update.callback_query
     await query.answer()
 
-    # Verificar se é um callback do botão "Voltar"
     if query.data == "accounts_action:back_to_accounts_menu":
         return await accounts_menu(update, context)
 
-    # Se for um clique em um botão de conta (ex: "delete_account:123")
     if query.data.startswith("delete_account:"):
         user_id = query.from_user.id
         account_id = int(query.data.split(':')[1])
         
-        # Obtém os detalhes da conta para verificar a recorrência e template_id
-        # id, name, amount, due_date, is_paid, recurrence_type, current_parcel, total_parcels, template_id
         account_details = accounts_db.get_account_by_id(account_id, user_id)
 
         if not account_details:
@@ -674,13 +633,11 @@ async def delete_account_confirm(update: Update, context: ContextTypes.DEFAULT_T
             logger.warning(f"Tentativa de deletar conta não existente ou não pertencente a {user_id}. ID: {account_id}.")
             return await accounts_menu(update, context)
         
-        # Desempacota os detalhes (certifique-se que o get_account_by_id retorna 9 valores)
         _, name, amount, due_date, _, recurrence_type, current_parcel, total_parcels, template_id = account_details
 
-        # Armazena os dados da conta temporariamente para a próxima etapa de confirmação
         context.user_data['account_to_delete'] = {
             'id': account_id,
-            'name': name,
+            'name': html.escape(name), # Escape do nome
             'recurrence_type': recurrence_type,
             'template_id': template_id,
             'amount': amount, 
@@ -688,22 +645,18 @@ async def delete_account_confirm(update: Update, context: ContextTypes.DEFAULT_T
             'year': datetime.datetime.strptime(due_date, '%Y-%m-%d').year
         }
 
-        # Verifica se a conta é recorrente ou parcelada
         if recurrence_type == 'none':
-            # Se não for recorrente, deleta diretamente a instância
             if accounts_db.delete_monthly_account(account_id, user_id):
-                await send_or_edit_message(update, f"🗑️ Conta '<b>{name}</b>' (ID: <code>{account_id}</code>) deletada com sucesso!", parse_mode=ParseMode.HTML)
+                await send_or_edit_message(update, f"🗑️ Conta '<b>{html.escape(name)}</b>' (ID: <code>{account_id}</code>) deletada com sucesso!", parse_mode=ParseMode.HTML)
                 logger.info(f"Instância de conta '{name}' (ID: {account_id}) deletada por {user_id} (não recorrente).")
             else:
-                await send_or_edit_message(update, f"❌ Não foi possível deletar a conta '<b>{name}</b>' (ID: <code>{account_id}</code>).", parse_mode=ParseMode.HTML)
+                await send_or_edit_message(update, f"❌ Não foi possível deletar a conta '<b>{html.escape(name)}</b>' (ID: <code>{account_id}</code>).", parse_mode=ParseMode.HTML)
                 logger.warning(f"Falha ao deletar instância de conta '{name}' (ID: {account_id}) para {user_id}.")
             
-            # Após a operação, retorna à tela de exclusão para que o usuário possa deletar mais
-            context.user_data.pop('account_to_delete', None) # Limpa dados temporários
+            context.user_data.pop('account_to_delete', None) 
             return await delete_account_start(update, context)
         else:
-            # Se for recorrente, pergunta ao usuário o que deseja deletar
-            message_text = f"A conta '<b>{name}</b>' (R$ {amount:.2f}, ID: <code>{account_id}</code>) é uma conta <b>recorrente</b>."
+            message_text = f"A conta '<b>{html.escape(name)}</b>' (R$ {amount:.2f}, ID: <code>{account_id}</code>) é uma conta <b>recorrente</b>."
             if recurrence_type == 'fixed_parcel':
                 message_text += f"\nEla é a parcela {current_parcel}/{total_parcels}."
             message_text += "\n\nComo você deseja excluí-la?"
@@ -716,9 +669,8 @@ async def delete_account_confirm(update: Update, context: ContextTypes.DEFAULT_T
             reply_markup = InlineKeyboardMarkup(keyboard)
             
             await send_or_edit_message(update, message_text, reply_markup, parse_mode=ParseMode.HTML)
-            return CONFIRM_DELETE_RECURRING_ACCOUNT # Muda para o novo estado de confirmação
+            return CONFIRM_DELETE_RECURRING_ACCOUNT 
     
-    # Em caso de callback inesperado, volta para o menu de contas
     return await accounts_menu(update, context)
 
 async def handle_delete_recurring_choice(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -727,7 +679,7 @@ async def handle_delete_recurring_choice(update: Update, context: ContextTypes.D
     await query.answer()
 
     choice_parts = query.data.split(':')
-    choice_type = choice_parts[1] # 'instance' ou 'template'
+    choice_type = choice_parts[1] 
     
     user_id = query.from_user.id
     account_data = context.user_data.get('account_to_delete')
@@ -739,11 +691,9 @@ async def handle_delete_recurring_choice(update: Update, context: ContextTypes.D
 
     account_id = account_data['id']
     template_id = account_data['template_id']
-    account_name = account_data['name']
+    account_name = account_data['name'] # Já escapado
     
-    # Se a escolha é 'instance', vamos deletar a instância e marcar como ignorada
     if choice_type == 'instance':
-        # Remove a instância do DB. A função delete_monthly_account agora cuidará de adicionar à tabela 'ignored_monthly_instances'
         if accounts_db.delete_monthly_account(account_id, user_id): 
             message = f"🗑️ A instância da conta '<b>{account_name}</b>' (ID: <code>{account_id}</code>) deste mês foi deletada com sucesso! Ela não aparecerá mais neste mês."
             logger.info(f"Instância de conta '{account_name}' (ID: {account_id}) deletada para user {user_id} e marcada para não ser regenerada.")
@@ -752,7 +702,6 @@ async def handle_delete_recurring_choice(update: Update, context: ContextTypes.D
             logger.warning(f"Falha ao deletar instância de conta '{account_name}' (ID: {account_id}) para {user_id}.")
     elif choice_type == 'template':
         if template_id:
-            # Deleta o template e todas as instâncias (a função já limpa a tabela de ignorados)
             if accounts_db.delete_account_template_and_future_instances(template_id, user_id):
                 message = f"🔥 O template da conta '<b>{account_name}</b>' e <b>todas as suas instâncias futuras</b> foram deletados com sucesso!"
                 logger.info(f"Template de conta '{account_name}' (ID: {template_id}) e instâncias futuras deletadas para user {user_id}.")
@@ -765,15 +714,9 @@ async def handle_delete_recurring_choice(update: Update, context: ContextTypes.D
     
     await send_or_edit_message(update, message, parse_mode=ParseMode.HTML)
     
-    context.user_data.pop('account_to_delete', None) # Limpa os dados temporários
+    context.user_data.pop('account_to_delete', None) 
     
-    # Retorna para a tela de deleção para que o usuário possa continuar a gerenciar as contas
     return await delete_account_start(update, context)
-
-
-# --- Restante das funções (add_income_start, delete_income_start, view_detailed_accounts, view_detailed_incomes, cancel_accounts_flow)
-# --- Permanecem inalteradas, mas os textos que elas enviam precisam ser revisados para escapa manual, pois send_or_edit_message não faz mais escape automático.
-# --- Vou garantir que todos os textos sejam adequadamente escapados.
 
 
 async def add_income_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -785,7 +728,7 @@ async def add_income_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def get_income_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Recebe a descrição da entrada."""
-    context.user_data['income_description'] = update.message.text.strip()
+    context.user_data['income_description'] = html.escape(update.message.text.strip()) # Escape do input do usuário
     await send_or_edit_message(update, "Qual o valor da entrada (ex: 3000.00)?", parse_mode=ParseMode.HTML)
     return ADD_INCOME_AMOUNT
 
@@ -798,11 +741,9 @@ async def get_income_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
             return ADD_INCOME_AMOUNT
         context.user_data['income_amount'] = amount
         
-        # Define os dados para o fluxo do calendário
         context.user_data['income_type'] = "entrada"
         context.user_data['income_next_state_calendar'] = GETTING_INCOME_DATE_FROM_CALENDAR
         
-        # Chama a função para enviar o calendário
         return await send_calendar_message(update, context, 'income')
 
     except ValueError:
@@ -811,9 +752,9 @@ async def get_income_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def process_income_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Processa os dados da entrada após a data ser selecionada."""
-    description = context.user_data['income_description']
+    description = context.user_data['income_description'] # Já escapado
     amount = context.user_data['income_amount']
-    income_date_db = context.user_data['income_selected_date'] # Data do calendário
+    income_date_db = context.user_data['income_selected_date'] 
     user_id = update.effective_user.id
 
     message_text = f"🎉 Entrada '<b>{description}</b>' (R$ {amount:.2f}) adicionada com sucesso!"
@@ -825,7 +766,6 @@ async def process_income_data(update: Update, context: ContextTypes.DEFAULT_TYPE
         await send_or_edit_message(update, "❌ Ops! Não foi possível adicionar a entrada. Talvez ela já exista ou houve um erro no banco de dados.", parse_mode=ParseMode.HTML)
         logger.warning(f"Falha ao adicionar entrada '{description}' para {user_id}.")
     
-    # Limpa os dados do user_data específicos deste fluxo
     context.user_data.pop('income_description', None)
     context.user_data.pop('income_amount', None)
     context.user_data.pop('income_selected_date', None)
@@ -835,7 +775,7 @@ async def process_income_data(update: Update, context: ContextTypes.DEFAULT_TYPE
     context.user_data.pop('income_cal_year', None)
     context.user_data.pop('income_cal_month', None)
     
-    return await accounts_menu(update, context) # Retorna para o menu de contas
+    return await accounts_menu(update, context) 
 
 async def delete_income_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Inicia o fluxo para deletar uma entrada, listando-as com botões."""
@@ -857,7 +797,6 @@ async def delete_income_start(update: Update, context: ContextTypes.DEFAULT_TYPE
     else:
         for inc_id, description, amount, income_date_db in incomes:
             try:
-                # Formato DD/MM para exibição
                 income_date_display = datetime.datetime.strptime(income_date_db, '%Y-%m-%d').strftime('%d/%m')
             except (ValueError, TypeError):
                 income_date_display = income_date_db if income_date_db else "N/A"
@@ -895,7 +834,6 @@ async def delete_income_confirm(update: Update, context: ContextTypes.DEFAULT_TY
             await send_or_edit_message(update, f"❌ Não foi possível deletar a entrada. Verifique se o ID está correto. ID: <code>{income_id}</code>", parse_mode=ParseMode.HTML)
             logger.warning(f"Falha ao deletar entrada ID {income_id} para {user_id}.")
     
-    # Após deletar, retorna para a tela de deleção de entradas para que o usuário possa deletar mais
     return await delete_income_start(update, context)
 
 async def view_detailed_accounts(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -924,15 +862,13 @@ async def view_detailed_accounts(update: Update, context: ContextTypes.DEFAULT_T
             elif recurrence == 'indefinite':
                 recurrence_info = " (Recorrente)"
             
-            # Para HTML, usar tags <b> para negrito e <code> para código.
-            # O python-telegram-bot lida automaticamente com o escape de <, >, & dentro das tags.
-            # Não é necessário usar escape_markdown aqui.
-            message_text += f"<b>ID: {acc_id}</b> - <b>{name}</b>\n  <code>R$ {amount:.2f} | Vencimento: {due_date_display}{recurrence_info} | Status: {status}</code>\n\n"
+            # Usando \n para quebras de linha. html.escape para name e date_display
+            message_text += f"<b>ID: {acc_id}</b> - <b>{html.escape(name)}</b>\n  <code>R$ {amount:.2f} | Vencimento: {html.escape(due_date_display)}{recurrence_info} | Status: {status}</code>\n\n"
     
     month_nav_keyboard = build_month_navigation_keyboard(year, month, "view_accounts_nav")
     back_button = [InlineKeyboardButton("↩️ Voltar ao Menu de Contas", callback_data="accounts_action:back_to_accounts_menu")]
     
-    final_keyboard = month_nav_keyboard + [back_button] # Navegação e botão de voltar
+    final_keyboard = month_nav_keyboard + [back_button] 
 
     reply_markup = InlineKeyboardMarkup(final_keyboard)
 
@@ -947,7 +883,7 @@ async def view_detailed_incomes(update: Update, context: ContextTypes.DEFAULT_TY
     month = context.user_data.get('view_month', context.user_data.get('current_accounts_month', today.month))
     year = context.user_data.get('view_year', context.user_data.get('current_accounts_year', today.month))
     
-    incomes = accounts_db.get_detailed_financial_incomes(user_id, month, year)
+    incomes = accounts_db.get_financial_incomes(user_id, month, year)
     month_name = datetime.date(year, month, 1).strftime('%B').capitalize()
 
     message_text = f"💸 <b>Suas Entradas/Rendimentos ({month_name}/{year}):</b>\n\n"
@@ -960,13 +896,13 @@ async def view_detailed_incomes(update: Update, context: ContextTypes.DEFAULT_TY
             except (ValueError, TypeError):
                 income_date_display = income_date_db if income_date_db else "N/A"
             
-            # Para HTML, usar tags <b> para negrito e <code> para código.
-            message_text += f"<b>ID: {inc_id}</b> - <b>{description}</b>\n  <code>R$ {amount:.2f} | Data: {income_date_display}</code>\n\n"
+            # Usando \n para quebras de linha. html.escape para description
+            message_text += f"<b>ID: {inc_id}</b> - <b>{html.escape(description)}</b>\n  <code>R$ {amount:.2f} | Data: {html.escape(income_date_display)}</code>\n\n"
     
     month_nav_keyboard = build_month_navigation_keyboard(year, month, "view_incomes_nav")
     back_button = [InlineKeyboardButton("↩️ Voltar ao Menu de Contas", callback_data="accounts_action:back_to_accounts_menu")]
 
-    final_keyboard = month_nav_keyboard + [back_button] # Navegação e botão de voltar
+    final_keyboard = month_nav_keyboard + [back_button] 
     reply_markup = InlineKeyboardMarkup(final_keyboard)
 
     await send_or_edit_message(update, message_text, reply_markup, parse_mode=ParseMode.HTML)
@@ -979,20 +915,18 @@ async def cancel_accounts_flow(update: Update, context: ContextTypes.DEFAULT_TYP
     await send_or_edit_message(update, "Operação de contas cancelada. ✅", parse_mode=ParseMode.HTML)
     
     logger.info(f"Diálogo de contas cancelado por {update.effective_user.id}.")
-    # Limpa apenas os dados relevantes ao fluxo de contas para evitar interferência em outras conversas
     keys_to_pop = [
         'account_name', 'account_amount', 'account_selected_date', 'account_recurrence',
         'account_parcel_count', 'account_type', 'account_next_state_calendar',
         'income_description', 'income_amount', 'income_selected_date', 'income_type',
         'income_next_state_calendar', 'calendar_flow_prefix',
         'account_cal_year', 'account_cal_month', 'income_cal_year', 'income_cal_month',
-        # Não limpar current_accounts_month/year, view_month/year, delete_month/year aqui,
-        # pois eles são usados para persistir a navegação entre chamadas do menu principal.
+        'account_to_delete', # Adicionado para limpar dados da deleção recorrente
     ]
     for key in keys_to_pop:
         context.user_data.pop(key, None)
         
-    return await accounts_menu(update, context) # Retorna ao menu de contas financeiras
+    return await accounts_menu(update, context) 
 
 
 # --- Setup dos Handlers de Contas ---
@@ -1000,15 +934,12 @@ def setup_accounts_handlers():
     """Configura e retorna o ConversationHandler para o gerenciamento de contas."""
     return ConversationHandler(
         entry_points=[
-            CommandHandler("contas", accounts_menu), # Comando para entrar no menu de contas
-            CallbackQueryHandler(accounts_menu, pattern="^accounts_action:open_menu$") # Caso seja chamado por um botão 'abrir menu de contas' de outro lugar
+            CommandHandler("contas", accounts_menu), 
+            CallbackQueryHandler(accounts_menu, pattern="^accounts_action:open_menu$") 
         ],
         states={
             VIEW_ACCOUNTS_MENU: [
-                # Este handler agora é mais específico para as ações do menu principal
-                # Também processará o 'ignore_summary_data' e seus variantes.
                 CallbackQueryHandler(handle_accounts_menu_selection, pattern=r"^accounts_action:|^accounts_nav:|^ignore_summary_data"), 
-                # Este handler para a navegação de meses nas telas de visualização/deleção que podem levar ao VIEW_ACCOUNTS_MENU
                 CallbackQueryHandler(handle_view_navigation, pattern=r"^(view_accounts_nav|view_incomes_nav|delete_accounts_nav|delete_incomes_nav):"), 
             ],
             
@@ -1016,10 +947,10 @@ def setup_accounts_handlers():
             ADD_ACCOUNT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_account_name)],
             ADD_ACCOUNT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_account_amount)],
             GETTING_ACCOUNT_DATE_FROM_CALENDAR: [
-                CallbackQueryHandler(handle_calendar_callback, pattern=r"^cal:"), # Qualquer clique no calendário
+                CallbackQueryHandler(handle_calendar_callback, pattern=r"^cal:"), 
             ],
             ADD_ACCOUNT_RECURRENCE: [
-                CallbackQueryHandler(get_account_recurrence, pattern="^(none|indefinite|fixed_parcel|cal:cancel)$") # Inclui o cancelar do calendário
+                CallbackQueryHandler(get_account_recurrence, pattern="^(none|indefinite|fixed_parcel|cal:cancel)$") 
             ],
             ADD_ACCOUNT_PARCEL_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_account_parcel_count)],
 
@@ -1031,13 +962,13 @@ def setup_accounts_handlers():
 
             # --- Fluxo de Deletar Conta (com navegação de mês) ---
             GET_ACCOUNT_ID_TO_DELETE: [
-                CallbackQueryHandler(delete_account_confirm, pattern=r"^delete_account:\d+$"), # Chama delete_account_confirm primeiro
-                CallbackQueryHandler(handle_view_navigation, pattern=r"^(delete_accounts_nav):"), # Para navegação de mês
-                CallbackQueryHandler(handle_accounts_menu_selection, pattern=r"^accounts_action:back_to_accounts_menu$") # Botão voltar
+                CallbackQueryHandler(delete_account_confirm, pattern=r"^delete_account:\d+$"), 
+                CallbackQueryHandler(handle_view_navigation, pattern=r"^(delete_accounts_nav):"), 
+                CallbackQueryHandler(handle_accounts_menu_selection, pattern=r"^accounts_action:back_to_accounts_menu$")
             ],
-            CONFIRM_DELETE_RECURRING_ACCOUNT: [ # NOVO ESTADO: Lida com a escolha do usuário
+            CONFIRM_DELETE_RECURRING_ACCOUNT: [ 
                 CallbackQueryHandler(handle_delete_recurring_choice, pattern=r"^delete_recurring_choice:(instance|template):\d+$"),
-                CallbackQueryHandler(handle_accounts_menu_selection, pattern=r"^accounts_action:back_to_accounts_menu$") # Botão voltar
+                CallbackQueryHandler(handle_accounts_menu_selection, pattern=r"^accounts_action:back_to_accounts_menu$") 
             ],
 
 
@@ -1045,30 +976,26 @@ def setup_accounts_handlers():
             ADD_INCOME_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_income_description)],
             ADD_INCOME_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_income_amount)],
             GETTING_INCOME_DATE_FROM_CALENDAR: [
-                CallbackQueryHandler(handle_calendar_callback, pattern=r"^cal:"), # Qualquer clique no calendário
+                CallbackQueryHandler(handle_calendar_callback, pattern=r"^cal:"), 
             ],
 
             # --- Fluxo de Deletar Entrada (com navegação de mês) ---
             GET_INCOME_ID_TO_DELETE: [
                 CallbackQueryHandler(delete_income_confirm, pattern=r"^delete_income:\d+$"),
-                CallbackQueryHandler(handle_view_navigation, pattern=r"^(delete_incomes_nav):"), # Para navegação de mês
+                CallbackQueryHandler(handle_view_navigation, pattern=r"^(delete_incomes_nav):"), 
                 CallbackQueryHandler(handle_accounts_menu_selection, pattern=r"^accounts_action:back_to_accounts_menu$")
             ],
             
-            # Estado para lidar com a navegação de meses em telas detalhadas (mantendo o estado para que os botões funcionam)
-            # Este estado captura as navegações de mês de dentro de view_accounts e view_detailed_incomes, etc.
             NAVIGATING_MONTHS: [CallbackQueryHandler(handle_view_navigation, pattern=r"^(view_accounts_nav|view_incomes_nav|delete_accounts_nav|delete_incomes_nav):")],
 
         },
         fallbacks=[
-            CallbackQueryHandler(cancel_accounts_flow, pattern="^cal:cancel$"), # Para cancelar fluxos com calendário
-            CommandHandler("cancelar", cancel_accounts_flow), # Cancelar em qualquer ponto da conversa de contas
-            # Se algo inesperado acontecer, volta para o menu principal do bot
-            # Certifique-se de que este fallback não intercepte mensagens que deveriam ir para outros handlers
+            CallbackQueryHandler(cancel_accounts_flow, pattern="^cal:cancel$"), 
+            CommandHandler("cancelar", cancel_accounts_flow), 
             MessageHandler(filters.TEXT & ~filters.COMMAND, accounts_menu) 
         ],
         allow_reentry=True,
         map_to_parent={
-            ConversationHandler.END: ConversationHandler.END # Retorna ao menu principal do bot
+            ConversationHandler.END: ConversationHandler.END 
         }
     )

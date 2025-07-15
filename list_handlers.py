@@ -1,9 +1,9 @@
 import logging
-import telegram 
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import ContextTypes, ConversationHandler
+from telegram.constants import ParseMode # Importar ParseMode para uso explícito
 import db 
-import handlers # Importar handlers para chamar send_main_help_menu
+import handlers # Manter aqui, pois list_handlers precisa chamar handlers.send_main_help_menu
 
 logger = logging.getLogger(__name__)
 
@@ -13,9 +13,9 @@ VIEWING_LIST_COMMAND_START = 2
 SELECTING_LIST_TO_ADD_ITEM = 3 
 GETTING_ITEM_TEXT = 4
 SELECTING_LIST_TO_TOGGLE = 5 
-GETTING_ITEM_ID_TO_TOGGLE = 6 # Este estado agora receberá um callback_query
+GETTING_ITEM_ID_TO_TOGGLE = 6 
 SELECTING_LIST_TO_REMOVE = 7 
-GETTING_ITEM_ID_TO_REMOVE = 8 # Este estado agora receberá um callback_query
+GETTING_ITEM_ID_TO_REMOVE = 8 
 SELECTING_LIST_TO_DELETE = 9 
 CONFIRM_DELETE_LIST = 10 
 LIST_MENU = 11 
@@ -34,15 +34,27 @@ async def _send_list_selection_keyboard(update: Update, context: ContextTypes.DE
         if update.callback_query:
             await update.callback_query.answer()
             try:
-                await update.callback_query.edit_message_text("Você ainda não tem nenhuma lista. Crie uma com o botão abaixo!", reply_markup=reply_markup)
+                await update.callback_query.edit_message_text(
+                    "Você ainda não tem nenhuma lista. Crie uma com o botão abaixo!", 
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             except telegram.error.BadRequest as e:
                 if "Message is not modified" in str(e):
                     logger.info("Tentativa de editar mensagem com conteúdo idêntico em _send_list_selection_keyboard (sem listas). Enviando nova mensagem).")
-                    await update.effective_message.reply_text("Você ainda não tem nenhuma lista. Crie uma com o botão abaixo!", reply_markup=reply_markup)
+                    await update.effective_message.reply_text(
+                        "Você ainda não tem nenhuma lista. Crie uma com o botão abaixo!", 
+                        reply_markup=reply_markup,
+                        parse_mode=ParseMode.HTML # Garantir parse_mode
+                    )
                 else:
                     raise e
         else:
-            await update.message.reply_text("Você ainda não tem nenhuma lista. Crie uma com o botão abaixo!", reply_markup=reply_markup)
+            await update.message.reply_text(
+                "Você ainda não tem nenhuma lista. Crie uma com o botão abaixo!", 
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         return ConversationHandler.END 
     
     keyboard = []
@@ -55,15 +67,27 @@ async def _send_list_selection_keyboard(update: Update, context: ContextTypes.DE
     if update.callback_query:
         await update.callback_query.answer()
         try:
-            await update.callback_query.edit_message_text(text=message_text, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(
+                text=message_text, 
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico em _send_list_selection_keyboard. Enviando nova mensagem).")
-                await update.effective_message.reply_text(message_text, reply_markup=reply_markup)
+                await update.effective_message.reply_text(
+                    message_text, 
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e 
     else:
-        await update.message.reply_text(message_text, reply_markup=reply_markup)
+        await update.message.reply_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
 
 async def _send_list_action_menu(update: Update, list_id: int, list_name: str):
     """Envia o menu de ações para uma lista específica."""
@@ -83,15 +107,27 @@ async def _send_list_action_menu(update: Update, list_id: int, list_name: str):
     if update.callback_query:
         await update.callback_query.answer()
         try:
-            await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(
+                message_text, 
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico em _send_list_action_menu. Enviando nova mensagem).")
-                await update.effective_message.reply_text(message_text, reply_markup=reply_markup)
+                await update.effective_message.reply_text(
+                    message_text, 
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e
     else: 
-        await update.effective_message.reply_text(message_text, reply_markup=reply_markup)
+        await update.effective_message.reply_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
 
 
 # --- Handlers de Início de Conversa ---
@@ -114,20 +150,32 @@ async def list_my_lists_menu(update: Update, context: ContextTypes.DEFAULT_TYPE)
     keyboard.append([InlineKeyboardButton("Voltar ao Menu Principal", callback_data="help_category:main_menu")])
     reply_markup = InlineKeyboardMarkup(keyboard)
 
-    message_text = "Gerencie suas Listas:\nOrganize suas tarefas e compras facilmente! Selecione uma ação:"
+    message_text = "Gerencie suas Listas:\nOrganize suas tarefas e compras facilmente! Selecione uma ação:" # Alterado de <br> para \n
     
     if update.callback_query:
         await update.callback_query.answer()
         try:
-            await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(
+                message_text, 
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico em list_my_lists_menu. Enviando nova mensagem).")
-                await update.effective_message.reply_text(message_text, reply_markup=reply_markup)
+                await update.effective_message.reply_text(
+                    message_text, 
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e 
     else:
-        await update.message.reply_text(message_text, reply_markup=reply_markup)
+        await update.message.reply_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
     return LIST_MENU
 
 async def new_list_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -138,15 +186,24 @@ async def new_list_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if update.callback_query:
         await update.callback_query.answer()
         try:
-            await update.callback_query.edit_message_text(message_text)
+            await update.callback_query.edit_message_text(
+                message_text,
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico em new_list_start. Enviando nova mensagem).")
-                await update.effective_message.reply_text(message_text)
+                await update.effective_message.reply_text(
+                    message_text,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e
     else:
-        await update.message.reply_text(message_text)
+        await update.message.reply_text(
+            message_text,
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
     return SELECTING_LIST_NAME
 
 async def get_list_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
@@ -156,13 +213,22 @@ async def get_list_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     logger.info(f"Usuário {user_id} informou o nome da lista: {list_name}")
 
     if not list_name:
-        await update.message.reply_text("O nome da lista não pode ser vazio. Por favor, digite um nome válido.")
+        await update.message.reply_text(
+            "O nome da lista não pode ser vazio. Por favor, digite um nome válido.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
         return SELECTING_LIST_NAME
 
     if db.add_list(user_id, list_name): 
-        await update.message.reply_text(f"Lista '{list_name}' criada com sucesso! 🎉")
+        await update.message.reply_text(
+            f"Lista '{list_name}' criada com sucesso! 🎉",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
     else:
-        await update.message.reply_text(f"Já existe uma lista com o nome '{list_name}'. Por favor, escolha outro nome.")
+        await update.message.reply_text(
+            f"Já existe uma lista com o nome '{list_name}'. Por favor, escolha outro nome.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
     
     await list_my_lists_menu(update, context) 
     return ConversationHandler.END
@@ -191,7 +257,10 @@ async def get_list_to_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         
         list_info = db.get_list_by_id(list_id, user_id) 
         if not list_info:
-            await query.edit_message_text("Lista não encontrada ou você não tem permissão para acessá-la. Por favor, tente novamente.")
+            await query.edit_message_text(
+                "Lista não encontrada ou você não tem permissão para acessá-la. Por favor, tente novamente.",
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
             return ConversationHandler.END
         
         return await _display_list_items(update, context, list_id)
@@ -201,11 +270,17 @@ async def get_list_to_view(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     else:
         logger.warning(f"Callback de visualização de lista inválido ou não tratado: {callback_data}.")
         try:
-            await query.edit_message_text("Ocorreu um erro. Por favor, tente novamente.")
+            await query.edit_message_text(
+                "Ocorreu um erro. Por favor, tente novamente.",
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico (erro get_list_to_view). Enviando nova mensagem).")
-                await update.effective_message.reply_text("Ocorreu um erro. Por favor, tente novamente.")
+                await update.effective_message.reply_text(
+                    "Ocorreu um erro. Por favor, tente novamente.",
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e
         return ConversationHandler.END
@@ -237,15 +312,27 @@ async def _display_list_items(update: Update, context: ContextTypes.DEFAULT_TYPE
     if update.callback_query:
         await update.callback_query.answer()
         try:
-            await update.callback_query.edit_message_text(text=message, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(
+                text=message, 
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico em _display_list_items. Enviando nova mensagem).")
-                await update.effective_message.reply_text(text=message, reply_markup=reply_markup)
+                await update.effective_message.reply_text(
+                    text=message, 
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e
     else:
-        await update.message.reply_text(text=message, reply_markup=reply_markup)
+        await update.message.reply_text(
+            text=message, 
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
     return ConversationHandler.END 
 
 
@@ -259,7 +346,10 @@ async def add_item_start(update: Update, context: ContextTypes.DEFAULT_TYPE, pre
     if pre_selected_list_id:
         list_info = db.get_list_by_id(pre_selected_list_id, user_id)
         if not list_info:
-            await update.effective_message.reply_text("Lista não encontrada ou você não tem permissão para acessá-la. Por favor, tente novamente.")
+            await update.effective_message.reply_text(
+                "Lista não encontrada ou você não tem permissão para acessá-la. Por favor, tente novamente.",
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
             return ConversationHandler.END
         list_name = list_info[1]
         context.user_data['selected_list_id'] = pre_selected_list_id
@@ -268,15 +358,24 @@ async def add_item_start(update: Update, context: ContextTypes.DEFAULT_TYPE, pre
         if update.callback_query:
             await update.callback_query.answer()
             try:
-                await update.callback_query.edit_message_text(message_text)
+                await update.callback_query.edit_message_text(
+                    message_text,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             except telegram.error.BadRequest as e:
                 if "Message is not modified" in str(e):
                     logger.info("Tentativa de editar mensagem com conteúdo idêntico (add_item_start com pre_selected). Enviando nova mensagem).")
-                    await update.effective_message.reply_text(message_text)
+                    await update.effective_message.reply_text(
+                        message_text,
+                        parse_mode=ParseMode.HTML # Garantir parse_mode
+                    )
                 else:
                     raise e
         else:
-            await update.effective_message.reply_text(message_text)
+            await update.effective_message.reply_text(
+                message_text,
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         return GETTING_ITEM_TEXT
     else:
         await _send_list_selection_keyboard(update, context, "Para qual lista você quer adicionar um item?")
@@ -294,7 +393,10 @@ async def get_list_to_add_item(update: Update, context: ContextTypes.DEFAULT_TYP
         
         list_info = db.get_list_by_id(list_id, user_id) 
         if not list_info:
-            await query.edit_message_text("Lista não encontrada ou você não tem permissão para acessá-la. Por favor, tente novamente.")
+            await query.edit_message_text(
+                "Lista não encontrada ou você não tem permissão para acessá-la. Por favor, tente novamente.",
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
             return ConversationHandler.END
         list_name = list_info[1] 
 
@@ -303,11 +405,17 @@ async def get_list_to_add_item(update: Update, context: ContextTypes.DEFAULT_TYP
         
         message_text = f"Ok! Agora, qual item você quer adicionar à lista '{list_name}'?"
         try:
-            await query.edit_message_text(message_text)
+            await query.edit_message_text(
+                message_text,
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico (get_list_to_add_item). Enviando nova mensagem).")
-                await update.effective_message.reply_text(message_text)
+                await update.effective_message.reply_text(
+                    message_text,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e
         return GETTING_ITEM_TEXT
@@ -317,11 +425,17 @@ async def get_list_to_add_item(update: Update, context: ContextTypes.DEFAULT_TYP
     else:
         logger.warning(f"Callback de seleção de lista inválido para adicionar item: {callback_data}.")
         try:
-            await query.edit_message_text("Ocorreu um erro. Por favor, tente novamente.")
+            await query.edit_message_text(
+                "Ocorreu um erro. Por favor, tente novamente.",
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico (erro get_list_to_add_item). Enviando nova mensagem).")
-                await update.effective_message.reply_text("Ocorreu um erro. Por favor, tente novamente.")
+                await update.effective_message.reply_text(
+                    "Ocorreu um erro. Por favor, tente novamente.",
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e
         return ConversationHandler.END
@@ -334,17 +448,29 @@ async def get_item_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     list_name = context.user_data.get('selected_list_name')
 
     if not list_id or not list_name:
-        await update.message.reply_text("Parece que a lista não foi selecionada corretamente. Por favor, tente novamente com /additem.")
+        await update.message.reply_text(
+            "Parece que a lista não foi selecionada corretamente. Por favor, tente novamente com /additem.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
         return ConversationHandler.END
 
     if not item_text:
-        await update.message.reply_text("O item não pode ser vazio. Por favor, digite o texto do item.")
+        await update.message.reply_text(
+            "O item não pode ser vazio. Por favor, digite o texto do item.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
         return GETTING_ITEM_TEXT
 
     if db.add_list_item(list_id, item_text): 
-        await update.message.reply_text(f"Item '{item_text}' adicionado à lista '{list_name}' com sucesso! ✅")
+        await update.message.reply_text(
+            f"Item '{item_text}' adicionado à lista '{list_name}' com sucesso! ✅",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
     else:
-        await update.message.reply_text("Ocorreu um erro ao adicionar o item. Por favor, tente novamente.")
+        await update.message.reply_text(
+            "Ocorreu um erro ao adicionar o item. Por favor, tente novamente.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
     
     context.user_data.pop('selected_list_id', None)
     context.user_data.pop('selected_list_name', None)
@@ -378,7 +504,10 @@ async def get_list_to_toggle_item(update: Update, context: ContextTypes.DEFAULT_
         
         list_info = db.get_list_by_id(list_id, user_id) 
         if not list_info:
-            await query.edit_message_text("Lista não encontrada ou você não tem permissão para acessá-la. Por favor, tente novamente.")
+            await query.edit_message_text(
+                "Lista não encontrada ou você não tem permissão para acessá-la. Por favor, tente novamente.",
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
             return ConversationHandler.END
         
         return await _display_items_for_toggle(update, context, list_id)
@@ -388,11 +517,17 @@ async def get_list_to_toggle_item(update: Update, context: ContextTypes.DEFAULT_
     else:
         logger.warning(f"Callback de seleção de lista inválido para marcar/desmarcar item: {callback_data}.")
         try:
-            await query.edit_message_text("Ocorreu um erro. Por favor, tente novamente.")
+            await query.edit_message_text(
+                "Ocorreu um erro. Por favor, tente novamente.",
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico (erro get_list_to_toggle_item). Enviando nova mensagem).")
-                await update.effective_message.reply_text("Ocorreu um erro. Por favor, tente novamente.")
+                await update.effective_message.reply_text(
+                    "Ocorreu um erro. Por favor, tente novamente.",
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e
         return ConversationHandler.END
@@ -424,17 +559,29 @@ async def _display_items_for_toggle(update: Update, context: ContextTypes.DEFAUL
     if update.callback_query:
         await update.callback_query.answer()
         try:
-            await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(
+                message, 
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico (toggle - sem itens). Enviando nova mensagem).")
-                await update.effective_message.reply_text(message, reply_markup=reply_markup)
+                await update.effective_message.reply_text(
+                    message, 
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e
     else:
-        await update.effective_message.reply_text(message, reply_markup=reply_markup)
+        await update.effective_message.reply_text(
+            message, 
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
         
-    if not items: # Se não há itens, a conversa termina aqui
+    if not items: 
         context.user_data.pop('selected_list_id', None)
         context.user_data.pop('selected_list_name', None)
         return ConversationHandler.END
@@ -450,19 +597,28 @@ async def process_toggle_item_callback(update: Update, context: ContextTypes.DEF
     try:
         item_id = int(item_id_str)
     except ValueError:
-        await query.edit_message_text("ID de item inválido. Por favor, tente novamente.")
-        return ConversationHandler.END # Encerra se o ID for inválido
+        await query.edit_message_text(
+            "ID de item inválido. Por favor, tente novamente.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
+        return ConversationHandler.END 
 
     list_id = context.user_data.get('selected_list_id')
     list_name = context.user_data.get('selected_list_name')
 
     if not list_id or not list_name:
-        await query.edit_message_text("Parece que a lista não foi selecionada corretamente. Por favor, tente novamente.")
+        await query.edit_message_text(
+            "Parece que a lista não foi selecionada corretamente. Por favor, tente novamente.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
         return ConversationHandler.END
 
     item_info = db.get_list_item_by_id(item_id) 
     if not item_info or item_info[0] != list_id: 
-        await query.edit_message_text("Item não encontrado nesta lista ou não pertence a ela. Por favor, verifique o ID e tente novamente.")
+        await query.edit_message_text(
+            "Item não encontrado nesta lista ou não pertence a ela. Por favor, verifique o ID e tente novamente.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
         return ConversationHandler.END
     
     item_text = item_info[1]
@@ -471,9 +627,15 @@ async def process_toggle_item_callback(update: Update, context: ContextTypes.DEF
 
     if db.toggle_list_item(item_id, list_id): 
         status_text = "marcado como completo ✅" if new_status else "desmarcado ⬜"
-        await query.edit_message_text(f"Item '{item_text}' na lista '{list_name}' foi {status_text} com sucesso!")
+        await query.edit_message_text(
+            f"Item '{item_text}' na lista '{list_name}' foi {status_text} com sucesso!",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
     else:
-        await query.edit_message_text("Ocorreu um erro ao atualizar o item. Por favor, tente novamente.")
+        await query.edit_message_text(
+            "Ocorreu um erro ao atualizar o item. Por favor, tente novamente.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
 
     context.user_data.pop('selected_list_id', None)
     context.user_data.pop('selected_list_name', None)
@@ -507,7 +669,10 @@ async def get_list_to_remove_item(update: Update, context: ContextTypes.DEFAULT_
         
         list_info = db.get_list_by_id(list_id, user_id) 
         if not list_info:
-            await query.edit_message_text("Lista não encontrada ou você não tem permissão para acessá-la. Por favor, tente novamente.")
+            await query.edit_message_text(
+                "Lista não encontrada ou você não tem permissão para acessá-la. Por favor, tente novamente.",
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
             return ConversationHandler.END
         
         return await _display_items_for_remove(update, context, list_id)
@@ -517,11 +682,17 @@ async def get_list_to_remove_item(update: Update, context: ContextTypes.DEFAULT_
     else:
         logger.warning(f"Callback de seleção de lista inválido para remover item: {callback_data}.")
         try:
-            await query.edit_message_text("Ocorreu um erro. Por favor, tente novamente.")
+            await query.edit_message_text(
+                "Ocorreu um erro. Por favor, tente novamente.",
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico (erro get_list_to_remove_item). Enviando nova mensagem).")
-                await update.effective_message.reply_text("Ocorreu um erro. Por favor, tente novamente.")
+                await update.effective_message.reply_text(
+                    "Ocorreu um erro. Por favor, tente novamente.",
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e
         return ConversationHandler.END
@@ -553,17 +724,29 @@ async def _display_items_for_remove(update: Update, context: ContextTypes.DEFAUL
     if update.callback_query:
         await update.callback_query.answer()
         try:
-            await update.callback_query.edit_message_text(message, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(
+                message, 
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico (remove - sem itens). Enviando nova mensagem).")
-                await update.effective_message.reply_text(message, reply_markup=reply_markup)
+                await update.effective_message.reply_text(
+                    message, 
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e
     else:
-        await update.effective_message.reply_text(message, reply_markup=reply_markup)
+        await update.effective_message.reply_text(
+            message, 
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
 
-    if not items: # Se não há itens, a conversa termina aqui
+    if not items: 
         context.user_data.pop('selected_list_id', None)
         context.user_data.pop('selected_list_name', None)
         return ConversationHandler.END
@@ -579,25 +762,40 @@ async def process_remove_item_callback(update: Update, context: ContextTypes.DEF
     try:
         item_id = int(item_id_str)
     except ValueError:
-        await query.edit_message_text("ID de item inválido. Por favor, tente novamente.")
-        return ConversationHandler.END # Encerra se o ID for inválido
+        await query.edit_message_text(
+            "ID de item inválido. Por favor, tente novamente.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
+        return ConversationHandler.END 
 
     list_id = context.user_data.get('selected_list_id')
     list_name = context.user_data.get('selected_list_name')
 
     if not list_id or not list_name:
-        await query.edit_message_text("Parece que a lista não foi selecionada corretamente. Por favor, tente novamente.")
+        await query.edit_message_text(
+            "Parece que a lista não foi selecionada corretamente. Por favor, tente novamente.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
         return ConversationHandler.END
 
     item_info = db.get_list_item_by_id(item_id) 
     if not item_info or item_info[0] != list_id:
-        await query.edit_message_text("Item não encontrado nesta lista ou não pertence a ela. Por favor, verifique o ID e tente novamente.")
+        await query.edit_message_text(
+            "Item não encontrado nesta lista ou não pertence a ela. Por favor, verifique o ID e tente novamente.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
         return ConversationHandler.END
 
     if db.remove_list_item(item_id, list_id): 
-        await query.edit_message_text(f"Item '{item_info[1]}' removido da lista '{list_name}' com sucesso! 🗑️")
+        await query.edit_message_text(
+            f"Item '{item_info[1]}' removido da lista '{list_name}' com sucesso! 🗑️",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
     else:
-        await query.edit_message_text("Ocorreu um erro ao remover o item. Por favor, tente novamente.")
+        await query.edit_message_text(
+            "Ocorreu um erro ao remover o item. Por favor, tente novamente.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
 
     context.user_data.pop('selected_list_id', None)
     context.user_data.pop('selected_list_name', None)
@@ -632,7 +830,10 @@ async def get_list_to_delete(update: Update, context: ContextTypes.DEFAULT_TYPE)
         
         list_info = db.get_list_by_id(list_id, user_id)
         if not list_info:
-            await query.edit_message_text("Lista não encontrada para exclusão ou você não tem permissão para acessá-la. Por favor, tente novamente.")
+            await query.edit_message_text(
+                "Lista não encontrada para exclusão ou você não tem permissão para acessá-la. Por favor, tente novamente.",
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
             return ConversationHandler.END
         
         return await _confirm_delete_list(update, context, list_id)
@@ -642,11 +843,17 @@ async def get_list_to_delete(update: Update, context: ContextTypes.DEFAULT_TYPE)
     else:
         logger.warning(f"Callback de seleção de lista inválido para apagar lista: {callback_data}.")
         try:
-            await query.edit_message_text("Ocorreu um erro. Por favor, tente novamente.")
+            await query.edit_message_text(
+                "Ocorreu um erro. Por favor, tente novamente.",
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico (erro get_list_to_delete). Enviando nova mensagem).")
-                await update.effective_message.reply_text("Ocorreu um erro. Por favor, tente novamente.")
+                await update.effective_message.reply_text(
+                    "Ocorreu um erro. Por favor, tente novamente.",
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e
         return ConversationHandler.END
@@ -656,7 +863,10 @@ async def _confirm_delete_list(update: Update, context: ContextTypes.DEFAULT_TYP
     user_id = update.effective_user.id
     list_info = db.get_list_by_id(list_id, user_id)
     if not list_info:
-        await update.effective_message.reply_text("Lista não encontrada para exclusão ou você não tem permissão para acessá-la. Por favor, tente novamente.")
+        await update.effective_message.reply_text(
+            "Lista não encontrada para exclusão ou você não tem permissão para acessá-la. Por favor, tente novamente.",
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
         return ConversationHandler.END
     list_name = list_info[1]
     context.user_data['selected_list_id'] = list_id 
@@ -670,15 +880,27 @@ async def _confirm_delete_list(update: Update, context: ContextTypes.DEFAULT_TYP
     if update.callback_query:
         await update.callback_query.answer()
         try:
-            await update.callback_query.edit_message_text(message_text, reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(
+                message_text, 
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico (_confirm_delete_list). Enviando nova mensagem).")
-                await update.effective_message.reply_text(message_text, reply_markup=reply_markup)
+                await update.effective_message.reply_text(
+                    message_text, 
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e
     else:
-        await update.effective_message.reply_text(message_text, reply_markup=reply_markup)
+        await update.effective_message.reply_text(
+            message_text, 
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
     logger.info(f"Enviando pedido de confirmação para apagar lista ID {list_id} para {user_id}.") 
     return CONFIRM_DELETE_LIST
 
@@ -704,22 +926,34 @@ async def delete_list_confirm_action(update: Update, context: ContextTypes.DEFAU
             confirmation_message = f"Lista '{list_name or list_id}' e todos os seus itens foram apagados com sucesso! 🗑️"
             logger.info(f"Lista ID {list_id} apagada com sucesso por {user_id}.") 
             try:
-                await query.edit_message_text(confirmation_message) 
+                await query.edit_message_text(
+                    confirmation_message,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                ) 
             except telegram.error.BadRequest as e:
                 if "Message is not modified" in str(e):
                     logger.info("Tentativa de editar mensagem com conteúdo idêntico (delete_list - sucesso). Enviando nova mensagem).")
-                    await update.effective_message.reply_text(confirmation_message)
+                    await update.effective_message.reply_text(
+                        confirmation_message,
+                        parse_mode=ParseMode.HTML # Garantir parse_mode
+                    )
                 else:
                     raise e
         else:
             error_message = f"Ocorreu um erro ao apagar a lista ID {list_id}. Verifique se a lista existe ou se você tem permissão."
             logger.warning(f"Falha ao apagar lista ID {list_id} por {user_id}.") 
             try:
-                await query.edit_message_text(error_message)
+                await query.edit_message_text(
+                    error_message,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             except telegram.error.BadRequest as e:
                 if "Message is not modified" in str(e):
                     logger.info("Tentativa de editar mensagem com conteúdo idêntico (delete_list - erro). Enviando nova mensagem).")
-                    await update.effective_message.reply_text(error_message)
+                    await update.effective_message.reply_text(
+                        error_message,
+                        parse_mode=ParseMode.HTML # Garantir parse_mode
+                    )
                 else:
                     raise e
         
@@ -772,15 +1006,27 @@ async def cancel_list_dialog(update: Update, context: ContextTypes.DEFAULT_TYPE)
     if update.callback_query:
         await update.callback_query.answer()
         try:
-            await update.callback_query.edit_message_text("Operação de lista cancelada. ✅", reply_markup=reply_markup)
+            await update.callback_query.edit_message_text(
+                "Operação de lista cancelada. ✅", 
+                reply_markup=reply_markup,
+                parse_mode=ParseMode.HTML # Garantir parse_mode
+            )
         except telegram.error.BadRequest as e:
             if "Message is not modified" in str(e):
                 logger.info("Tentativa de editar mensagem com conteúdo idêntico (cancelamento). Enviando nova mensagem).")
-                await update.effective_message.reply_text("Operação de lista cancelada. ✅", reply_markup=reply_markup)
+                await update.effective_message.reply_text(
+                    "Operação de lista cancelada. ✅", 
+                    reply_markup=reply_markup,
+                    parse_mode=ParseMode.HTML # Garantir parse_mode
+                )
             else:
                 raise e
     else:
-        await update.message.reply_text("Operação de lista cancelada. ✅", reply_markup=reply_markup)
+        await update.message.reply_text(
+            "Operação de lista cancelada. ✅", 
+            reply_markup=reply_markup,
+            parse_mode=ParseMode.HTML # Garantir parse_mode
+        )
 
     context.user_data.pop('selected_list_id', None)
     context.user_data.pop('selected_list_name', None)
