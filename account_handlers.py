@@ -1,39 +1,42 @@
 import datetime
 import calendar
 import logging
-import html # Importado para html.escape
-
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup 
+import html
+import os # Importado para apagar o arquivo de imagem
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, InputFile
 from telegram.ext import ContextTypes, ConversationHandler, MessageHandler, CallbackQueryHandler, filters, CommandHandler 
 from telegram.constants import ParseMode 
-# from telegram.helpers import escape_markdown # Não é mais necessário, usando HTML com \n
-from handlers import send_main_help_menu # Mantido para permitir o retorno ao menu principal do bot
-import accounts_db # Importa o módulo de banco de dados para contas
+from handlers import send_main_help_menu 
+import accounts_db 
+
+# Importação do código do relatório que construímos
+from lilith_bot_queries import generate_monthly_report_image, generate_trimestral_report_image, generate_semestral_report_image, generate_anual_report_image
 
 logger = logging.getLogger(__name__)
 
 # --- Estados para o ConversationHandler de Contas (valores altos para evitar conflitos) ---
 ADD_ACCOUNT_NAME = 100
 ADD_ACCOUNT_AMOUNT = 101
-ADD_ACCOUNT_DUE_DATE = 102 # Este estado não é mais diretamente usado para entrada, mas como referência para o calendário
+ADD_ACCOUNT_DUE_DATE = 102 
 ADD_ACCOUNT_RECURRENCE = 103
 ADD_ACCOUNT_PARCEL_COUNT = 104
 GETTING_ACCOUNT_DATE_FROM_CALENDAR = 105
 
 GET_ACCOUNT_ID_TO_MARK = 110
 
-GET_ACCOUNT_ID_TO_DELETE = 120 # Estado para deletar contas
-CONFIRM_DELETE_RECURRING_ACCOUNT = 121 # NOVO ESTADO: Para confirmar exclusão de conta recorrente
+GET_ACCOUNT_ID_TO_DELETE = 120 
+CONFIRM_DELETE_RECURRING_ACCOUNT = 121 
 
 ADD_INCOME_DESCRIPTION = 130
 ADD_INCOME_AMOUNT = 131
-ADD_INCOME_DATE = 132 # Este estado não é mais diretamente usado para entrada, mas como referência para o calendário
+ADD_INCOME_DATE = 132 
 GETTING_INCOME_DATE_FROM_CALENDAR = 133
 
-GET_INCOME_ID_TO_DELETE = 140 # Estado para deletar entradas
+GET_INCOME_ID_TO_DELETE = 140 
 
 VIEW_ACCOUNTS_MENU = 150
-NAVIGATING_MONTHS = 160 # Estado para lidar com a navegação de meses no resumo/visualização
+NAVIGATING_MONTHS = 160 
+SHOW_REPORTS_MENU = 170 
 
 # --- Função Auxiliar para Enviar/Editar Mensagens ---
 async def send_or_edit_message(update: Update, text: str, reply_markup: InlineKeyboardMarkup = None, parse_mode: str = ParseMode.HTML): 
@@ -75,20 +78,16 @@ async def accounts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
     # Lógica para o emoji de status do saldo final
     emoji_status_final_balance = ""
     if summary['final_balance_this_month'] >= 0:
-        emoji_status_final_balance = "🎉" # Positivo ou zero
+        emoji_status_final_balance = "🎉" 
     else:
-        emoji_status_final_balance = "⚠️" # Negativo
+        emoji_status_final_balance = "⚠️" 
 
-    # --- NOVO: Lógica para apagar as mensagens anteriores do bot para manter a interface limpa ---
     if update.callback_query:
         try:
-            # Apaga a mensagem que o usuário clicou (se for um botão do bot)
             await update.callback_query.message.delete()
         except Exception as e:
             logger.warning(f"Não foi possível deletar a mensagem anterior do menu (callback): {e}")
         
-    # --- PRIMEIRO BLOCO: Cabeçalho + Botões de Resumo ---
-    # Usando <b> para negrito e o texto literal para parênteses
     header_text_part1 = f"💰 <b>Seu Resumo Financeiro ({month_name}/{current_year}):</b>"
 
     summary_buttons_data = []
@@ -120,14 +119,12 @@ async def accounts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
 
     first_message_reply_markup = InlineKeyboardMarkup(summary_buttons_data)
     
-    # Envia a PRIMEIRA MENSAGEM (cabeçalho + botões de resumo)
     if update.callback_query: 
         await update.effective_chat.send_message(text=header_text_part1, reply_markup=first_message_reply_markup, parse_mode=ParseMode.HTML)
     elif update.message: 
         await update.message.reply_text(text=header_text_part1, reply_markup=first_message_reply_markup, parse_mode=ParseMode.HTML)
 
 
-    # --- SEGUNDO BLOCO: Texto Rodapé + Botões de Ação ---
     footer_text_part2 = "Selecione uma opção abaixo ou navegue pelos meses:"
 
     action_buttons = [
@@ -142,12 +139,12 @@ async def accounts_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> i
         [InlineKeyboardButton("💸 Ver Entradas", callback_data="accounts_action:view_incomes")],
         [InlineKeyboardButton("🗑️ Deletar Conta", callback_data="accounts_action:delete_account")],
         [InlineKeyboardButton("🗑️ Deletar Entrada", callback_data="accounts_action:delete_income")],
+        [InlineKeyboardButton("📈 Gerar Relatório/Resumo", callback_data="accounts_action:show_reports")],
         [InlineKeyboardButton("↩️ Voltar ao Menu Principal do Bot", callback_data="accounts_action:main_menu_bot")]
     ]
     
     second_message_reply_markup = InlineKeyboardMarkup(action_buttons)
 
-    # Envia a SEGUNDA MENSAGEM (texto do rodapé + botões de ação)
     if update.callback_query: 
         await update.effective_chat.send_message(text=footer_text_part2, reply_markup=second_message_reply_markup, parse_mode=ParseMode.HTML)
     elif update.message: 
@@ -173,7 +170,7 @@ async def handle_accounts_menu_selection(update: Update, context: ContextTypes.D
         if action_value == "main_menu_bot":
             await send_or_edit_message(update, "Retornando ao menu principal do bot... 👋", parse_mode=ParseMode.HTML)
             context.user_data.clear() 
-            await send_main_help_menu(update, context) # Chama a função do handlers
+            await send_main_help_menu(update, context) 
             return ConversationHandler.END
         return await accounts_menu(update, context) 
 
@@ -200,6 +197,8 @@ async def handle_accounts_menu_selection(update: Update, context: ContextTypes.D
             context.user_data['delete_month'] = context.user_data['current_accounts_month']
             context.user_data['delete_year'] = context.user_data['current_accounts_year']
             return await delete_income_start(update, context)
+        elif action_value == "show_reports":
+            return await show_reports_menu(update, context)
     
     elif action_type == "accounts_nav": 
         current_month = context.user_data.get('current_accounts_month', datetime.date.today().month)
@@ -218,11 +217,153 @@ async def handle_accounts_menu_selection(update: Update, context: ContextTypes.D
     logger.warning(f"Ação de menu de contas não tratada: {query.data} por {update.effective_user.id}")
     return await accounts_menu(update, context) 
 
-# --- Funções de Calendário ---
+# --- Funções do Menu de Relatórios ---
+async def show_reports_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Exibe o menu com as opções de relatório."""
+    text = "📈 Selecione o tipo de relatório que você deseja gerar:"
+    keyboard = [
+        [InlineKeyboardButton("📊 Relatório Mensal", callback_data="report_action:monthly_report")],
+        [InlineKeyboardButton("📊 Relatório Trimestral", callback_data="report_action:quarterly_report")],
+        [InlineKeyboardButton("📊 Relatório Semestral", callback_data="report_action:semiannual_report")],
+        [InlineKeyboardButton("📊 Relatório Anual", callback_data="report_action:annual_report")],
+        [InlineKeyboardButton("↩️ Voltar ao Menu de Contas", callback_data="accounts_action:back_to_accounts_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    
+    await send_or_edit_message(update, text, reply_markup, parse_mode=ParseMode.HTML)
+    return SHOW_REPORTS_MENU
+
+async def handle_report_selection(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
+    """Lida com a seleção de um relatório para ser gerado."""
+    query = update.callback_query
+    await query.answer()
+
+    data_parts = query.data.split(':')
+    action_type = data_parts[0]
+    action_value = data_parts[1]
+    
+    if action_type == "accounts_action" and action_value == "back_to_accounts_menu":
+        return await accounts_menu(update, context)
+    
+    if action_type == "report_action":
+        user_id = query.from_user.id
+        
+        if action_value == "monthly_report":
+            month = context.user_data.get('current_accounts_month', datetime.date.today().month)
+            year = context.user_data.get('current_accounts_year', datetime.date.today().year)
+
+            await send_or_edit_message(update, "Gerando seu relatório mensal... Isso pode levar alguns segundos. ⏳", parse_mode=ParseMode.HTML)
+            
+            try:
+                image_file, error = generate_monthly_report_image(user_id, month, year)
+                
+                if error:
+                    await send_or_edit_message(update, f"❌ Ocorreu um erro ao gerar o relatório: {error}", parse_mode=ParseMode.HTML)
+                    logger.error(f"Erro ao gerar relatório mensal para {user_id}: {error}")
+                else:
+                    with open(image_file, 'rb') as image_data:
+                        await context.bot.send_photo(
+                            chat_id=update.effective_chat.id,
+                            photo=InputFile(image_data),
+                            caption=f"📈 **Relatório Financeiro Mensal:**",
+                            parse_mode=ParseMode.MARKDOWN_V2
+                        )
+                    os.remove(image_file) 
+                    await send_or_edit_message(update, "✅ Relatório enviado com sucesso!", parse_mode=ParseMode.HTML)
+            except Exception as e:
+                await send_or_edit_message(update, f"❌ Ocorreu um erro inesperado ao gerar o relatório. {e}", parse_mode=ParseMode.HTML)
+                logger.error(f"Erro inesperado ao gerar relatório para {user_id}: {e}")
+        
+        # NOVOS HANDLERS COM MENSAGEM DE PLACEHOLDER
+        elif action_value == "quarterly_report":
+            user_id = update.effective_chat.id
+            month = datetime.date.today().month
+            year = datetime.date.today().year
+            quarter = (month - 1) // 3 + 1
+            
+            await send_or_edit_message(update, "Gerando seu relatório trimestral... Isso pode levar alguns segundos. ⏳", parse_mode=ParseMode.HTML)
+            
+            try:
+                image_file, error = generate_trimestral_report_image(user_id=user_id, quarter=quarter, year=year)
+                
+                if error:
+                    await send_or_edit_message(update, f"❌ Ocorreu um erro ao gerar o relatório: {error}", parse_mode=ParseMode.HTML)
+                    logger.error(f"Erro ao gerar relatório trimestral para {user_id}: {error}")
+                else:
+                    with open(image_file, 'rb') as image_data:
+                        await context.bot.send_photo(
+                            chat_id=update.effective_chat.id,
+                            photo=InputFile(image_data),
+                            caption=f"📈 **Relatório Financeiro Trimestral:**",
+                            parse_mode=ParseMode.MARKDOWN_V2
+                        )
+                    os.remove(image_file)
+                    await send_or_edit_message(update, "✅ Relatório enviado com sucesso!", parse_mode=ParseMode.HTML)
+            except Exception as e:
+                await send_or_edit_message(update, f"❌ Ocorreu um erro inesperado ao gerar o relatório. {e}", parse_mode=ParseMode.HTML)
+                logger.error(f"Erro inesperado ao gerar relatório para {user_id}: {e}")
+
+        elif action_value == "semiannual_report":
+            user_id = update.effective_chat.id
+            year = datetime.date.today().year
+            semester = 1 if datetime.date.today().month <= 6 else 2
+            
+            await send_or_edit_message(update, "Gerando seu relatório semestral... Isso pode levar alguns segundos. ⏳", parse_mode=ParseMode.HTML)
+            
+            try:
+                image_file, error = generate_semestral_report_image(user_id=user_id, semester=semester, year=year)
+                
+                if error:
+                    await send_or_edit_message(update, f"❌ Ocorreu um erro ao gerar o relatório: {error}", parse_mode=ParseMode.HTML)
+                    logger.error(f"Erro ao gerar relatório semestral para {user_id}: {error}")
+                else:
+                    with open(image_file, 'rb') as image_data:
+                        await context.bot.send_photo(
+                            chat_id=update.effective_chat.id,
+                            photo=InputFile(image_data),
+                            caption=f"📈 **Relatório Financeiro Semestral:**",
+                            parse_mode=ParseMode.MARKDOWN_V2
+                        )
+                    os.remove(image_file)
+                    await send_or_edit_message(update, "✅ Relatório enviado com sucesso!", parse_mode=ParseMode.HTML)
+            except Exception as e:
+                await send_or_edit_message(update, f"❌ Ocorreu um erro inesperado ao gerar o relatório. {e}", parse_mode=ParseMode.HTML)
+                logger.error(f"Erro inesperado ao gerar relatório para {user_id}: {e}")
+
+        elif action_value == "annual_report":
+            user_id = update.effective_chat.id
+            year = datetime.date.today().year
+            
+            await send_or_edit_message(update, "Gerando seu relatório anual... Isso pode levar alguns segundos. ⏳", parse_mode=ParseMode.HTML)
+            
+            try:
+                image_file, error = generate_anual_report_image(user_id=user_id, year=year)
+                
+                if error:
+                    await send_or_edit_message(update, f"❌ Ocorreu um erro ao gerar o relatório: {error}", parse_mode=ParseMode.HTML)
+                    logger.error(f"Erro ao gerar relatório anual para {user_id}: {error}")
+                else:
+                    with open(image_file, 'rb') as image_data:
+                        await context.bot.send_photo(
+                            chat_id=update.effective_chat.id,
+                            photo=InputFile(image_data),
+                            caption=f"📈 **Relatório Financeiro Anual:**",
+                            parse_mode=ParseMode.MARKDOWN_V2
+                        )
+                    os.remove(image_file)
+                    await send_or_edit_message(update, "✅ Relatório enviado com sucesso!", parse_mode=ParseMode.HTML)
+            except Exception as e:
+                await send_or_edit_message(update, f"❌ Ocorreu um erro inesperado ao gerar o relatório. {e}", parse_mode=ParseMode.HTML)
+                logger.error(f"Erro inesperado ao gerar relatório para {user_id}: {e}")
+
+
+    return await show_reports_menu(update, context)
+
+
+# --- Funções Auxiliares de Calendário ---
 def create_calendar_keyboard(year: int, month: int) -> InlineKeyboardMarkup:
     """Cria um InlineKeyboardMarkup para um calendário."""
     keyboard = []
-    # Cabeçalho: Mês e Ano
     keyboard.append([
         InlineKeyboardButton("«", callback_data=f"cal:nav:{year-1}:{month}"), 
         InlineKeyboardButton("<", callback_data=f"cal:nav:{year}:{month-1 if month > 1 else 12}"), 
@@ -231,11 +372,9 @@ def create_calendar_keyboard(year: int, month: int) -> InlineKeyboardMarkup:
         InlineKeyboardButton("»", callback_data=f"cal:nav:{year+1}:{month}") 
     ])
 
-    # Dias da semana
     week_days = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"]
     keyboard.append([InlineKeyboardButton(day, callback_data="cal:ignore") for day in week_days])
 
-    # Dias do mês
     cal = calendar.Calendar(firstweekday=6) 
     for week in cal.monthdayscalendar(year, month):
         row = []
@@ -258,8 +397,6 @@ async def send_calendar_message(update: Update, context: ContextTypes.DEFAULT_TY
     context.user_data['calendar_flow_prefix'] = prefix
 
     keyboard = create_calendar_keyboard(year, month)
-    # Aqui, html.escape é usado porque context.user_data[f'{prefix}_type'] vem do código, não do usuário.
-    # Mas é um bom hábito para qualquer string que possa conter < ou >.
     escaped_type = html.escape(context.user_data[f'{prefix}_type'])
 
     text = f"🗓️ Selecione a data para a {escaped_type}:"
@@ -327,7 +464,7 @@ async def add_account_start(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def get_account_name(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Recebe o nome da conta."""
-    context.user_data['account_name'] = html.escape(update.message.text.strip()) # Escape do input do usuário
+    context.user_data['account_name'] = html.escape(update.message.text.strip()) 
     await send_or_edit_message(update, "Qual o valor dessa conta (ex: 1500.50)?", parse_mode=ParseMode.HTML)
     return ADD_ACCOUNT_AMOUNT
 
@@ -456,7 +593,6 @@ async def mark_account_paid_start(update: Update, context: ContextTypes.DEFAULT_
     
     accounts = accounts_db.get_monthly_accounts(user_id, current_month, current_year)
 
-    # Filtra apenas as contas PENDENTES para marcar como paga
     pending_accounts = [acc for acc in accounts if not acc[4]] 
 
     month_display = datetime.date(current_year, current_month, 1).strftime('%B/%Y')
@@ -637,7 +773,7 @@ async def delete_account_confirm(update: Update, context: ContextTypes.DEFAULT_T
 
         context.user_data['account_to_delete'] = {
             'id': account_id,
-            'name': html.escape(name), # Escape do nome
+            'name': html.escape(name), 
             'recurrence_type': recurrence_type,
             'template_id': template_id,
             'amount': amount, 
@@ -691,7 +827,7 @@ async def handle_delete_recurring_choice(update: Update, context: ContextTypes.D
 
     account_id = account_data['id']
     template_id = account_data['template_id']
-    account_name = account_data['name'] # Já escapado
+    account_name = account_data['name'] 
     
     if choice_type == 'instance':
         if accounts_db.delete_monthly_account(account_id, user_id): 
@@ -728,7 +864,7 @@ async def add_income_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
 async def get_income_description(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Recebe a descrição da entrada."""
-    context.user_data['income_description'] = html.escape(update.message.text.strip()) # Escape do input do usuário
+    context.user_data['income_description'] = html.escape(update.message.text.strip()) 
     await send_or_edit_message(update, "Qual o valor da entrada (ex: 3000.00)?", parse_mode=ParseMode.HTML)
     return ADD_INCOME_AMOUNT
 
@@ -752,7 +888,7 @@ async def get_income_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) 
 
 async def process_income_data(update: Update, context: ContextTypes.DEFAULT_TYPE) -> int:
     """Processa os dados da entrada após a data ser selecionada."""
-    description = context.user_data['income_description'] # Já escapado
+    description = context.user_data['income_description'] 
     amount = context.user_data['income_amount']
     income_date_db = context.user_data['income_selected_date'] 
     user_id = update.effective_user.id
@@ -801,7 +937,6 @@ async def delete_income_start(update: Update, context: ContextTypes.DEFAULT_TYPE
             except (ValueError, TypeError):
                 income_date_display = income_date_db if income_date_db else "N/A"
             
-            # No HTML, o conteúdo dentro dos botões é tratado como texto simples.
             button_text = f"{description} - R$ {amount:.2f} ({income_date_display})"
             income_buttons.append([InlineKeyboardButton(button_text, callback_data=f"delete_income:{inc_id}")])
     
@@ -862,7 +997,6 @@ async def view_detailed_accounts(update: Update, context: ContextTypes.DEFAULT_T
             elif recurrence == 'indefinite':
                 recurrence_info = " (Recorrente)"
             
-            # Usando \n para quebras de linha. html.escape para name e date_display
             message_text += f"<b>ID: {acc_id}</b> - <b>{html.escape(name)}</b>\n  <code>R$ {amount:.2f} | Vencimento: {html.escape(due_date_display)}{recurrence_info} | Status: {status}</code>\n\n"
     
     month_nav_keyboard = build_month_navigation_keyboard(year, month, "view_accounts_nav")
@@ -896,7 +1030,6 @@ async def view_detailed_incomes(update: Update, context: ContextTypes.DEFAULT_TY
             except (ValueError, TypeError):
                 income_date_display = income_date_db if income_date_db else "N/A"
             
-            # Usando \n para quebras de linha. html.escape para description
             message_text += f"<b>ID: {inc_id}</b> - <b>{html.escape(description)}</b>\n  <code>R$ {amount:.2f} | Data: {html.escape(income_date_display)}</code>\n\n"
     
     month_nav_keyboard = build_month_navigation_keyboard(year, month, "view_incomes_nav")
@@ -921,7 +1054,7 @@ async def cancel_accounts_flow(update: Update, context: ContextTypes.DEFAULT_TYP
         'income_description', 'income_amount', 'income_selected_date', 'income_type',
         'income_next_state_calendar', 'calendar_flow_prefix',
         'account_cal_year', 'account_cal_month', 'income_cal_year', 'income_cal_month',
-        'account_to_delete', # Adicionado para limpar dados da deleção recorrente
+        'account_to_delete', 
     ]
     for key in keys_to_pop:
         context.user_data.pop(key, None)
@@ -943,7 +1076,6 @@ def setup_accounts_handlers():
                 CallbackQueryHandler(handle_view_navigation, pattern=r"^(view_accounts_nav|view_incomes_nav|delete_accounts_nav|delete_incomes_nav):"), 
             ],
             
-            # --- Fluxo de Adicionar Conta ---
             ADD_ACCOUNT_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_account_name)],
             ADD_ACCOUNT_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_account_amount)],
             GETTING_ACCOUNT_DATE_FROM_CALENDAR: [
@@ -954,13 +1086,11 @@ def setup_accounts_handlers():
             ],
             ADD_ACCOUNT_PARCEL_COUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_account_parcel_count)],
 
-            # --- Fluxo de Marcar Conta como Paga ---
             GET_ACCOUNT_ID_TO_MARK: [
                 CallbackQueryHandler(mark_account_paid_confirm, pattern=r"^mark_account:\d+$"),
                 CallbackQueryHandler(mark_account_paid_confirm, pattern=r"^accounts_action:back_to_accounts_menu$"),
             ],
 
-            # --- Fluxo de Deletar Conta (com navegação de mês) ---
             GET_ACCOUNT_ID_TO_DELETE: [
                 CallbackQueryHandler(delete_account_confirm, pattern=r"^delete_account:\d+$"), 
                 CallbackQueryHandler(handle_view_navigation, pattern=r"^(delete_accounts_nav):"), 
@@ -971,15 +1101,12 @@ def setup_accounts_handlers():
                 CallbackQueryHandler(handle_accounts_menu_selection, pattern=r"^accounts_action:back_to_accounts_menu$") 
             ],
 
-
-            # --- Fluxo de Adicionar Entrada ---
             ADD_INCOME_DESCRIPTION: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_income_description)],
             ADD_INCOME_AMOUNT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_income_amount)],
             GETTING_INCOME_DATE_FROM_CALENDAR: [
                 CallbackQueryHandler(handle_calendar_callback, pattern=r"^cal:"), 
             ],
 
-            # --- Fluxo de Deletar Entrada (com navegação de mês) ---
             GET_INCOME_ID_TO_DELETE: [
                 CallbackQueryHandler(delete_income_confirm, pattern=r"^delete_income:\d+$"),
                 CallbackQueryHandler(handle_view_navigation, pattern=r"^(delete_incomes_nav):"), 
@@ -987,6 +1114,11 @@ def setup_accounts_handlers():
             ],
             
             NAVIGATING_MONTHS: [CallbackQueryHandler(handle_view_navigation, pattern=r"^(view_accounts_nav|view_incomes_nav|delete_accounts_nav|delete_incomes_nav):")],
+
+            SHOW_REPORTS_MENU: [
+                CallbackQueryHandler(handle_report_selection, pattern=r"^report_action:"),
+                CallbackQueryHandler(handle_accounts_menu_selection, pattern=r"^accounts_action:back_to_accounts_menu$")
+            ],
 
         },
         fallbacks=[
